@@ -18,19 +18,21 @@ class ToolParser {
   bool _insideThought = false;
   bool _startVideoFired = false;
   bool _stopVideoFired = false;
+  bool _isArmed = false;
+  List<String> _allowedTags = [];
 
   // ─── Sentinel Substrings ──────────────────────────────────────────────────
 
   static const String thinkOpen = '<|channel>thought';
   static const String thinkClose = '<channel|>';
-  static const String startVideoTag = '<START_VIDEO>';
-  static const String stopVideoTag = '<STOP_VIDEO>';
+  static const String startVideoTag = '<CMD_SYS_OPTICS_1>';
+  static const String stopVideoTag = '<CMD_SYS_OPTICS_0>';
 
   static final RegExp geofenceRegex =
-      RegExp(r'<GEOFENCE:\s*([^|]+)\s*\|\s*([^>]+)>');
+      RegExp(r'<CMD_SYS_LOC_TRG:\s*([^|]+)\s*\|\s*([^>]+)>');
 
   static final RegExp calendarRegex = RegExp(
-    r'<CALENDAR:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^>]+)>',
+    r'<CMD_SYS_CAL_EVT:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^>]+)>',
   );
 
   ToolParser({
@@ -38,6 +40,18 @@ class ToolParser {
     this.onGeofenceDetected,
     this.onCalendarDetected,
   });
+
+  /// Arms the parser for a specific turn, allowing only certain tags to trigger callbacks.
+  void armParser(List<String> expectedTags) {
+    _isArmed = true;
+    _allowedTags = expectedTags;
+  }
+
+  /// Resets the parser state to disarmed.
+  void disarmParser() {
+    _isArmed = false;
+    _allowedTags = [];
+  }
 
   /// Processes a single token received from the stream.
   ///
@@ -88,51 +102,61 @@ class ToolParser {
 
     final String currentClean = cleanBuffer.toString();
 
-    if (!_startVideoFired && currentClean.contains(startVideoTag)) {
-      _startVideoFired = true;
+    if (currentClean.contains(startVideoTag)) {
       _stripTag(startVideoTag);
-      onCommandDetected?.call('START_VIDEO');
+      if (_isArmed && _allowedTags.contains(startVideoTag) && !_startVideoFired) {
+        _startVideoFired = true;
+        onCommandDetected?.call('START_VIDEO');
+      }
     }
 
-    if (!_stopVideoFired && currentClean.contains(stopVideoTag)) {
-      _stopVideoFired = true;
+    if (currentClean.contains(stopVideoTag)) {
       _stripTag(stopVideoTag);
-      onCommandDetected?.call('STOP_VIDEO');
+      if (_isArmed && _allowedTags.contains(stopVideoTag) && !_stopVideoFired) {
+        _stopVideoFired = true;
+        onCommandDetected?.call('STOP_VIDEO');
+      }
     }
 
     // ── 3. Tool Interceptors ───────────────────────────────────────────────
 
     final geofenceMatch = geofenceRegex.firstMatch(cleanBuffer.toString());
     if (geofenceMatch != null) {
-      final locationKey = geofenceMatch.group(1)?.trim() ?? '';
-      final taskDesc =
-          geofenceMatch.group(2)?.trim() ?? 'Recordatorio de ubicación';
+      final tag = geofenceMatch.group(0)!;
+      _stripTag(tag);
 
-      _stripTag(geofenceMatch.group(0)!);
-      onGeofenceDetected?.call(locationKey, taskDesc);
+      if (_isArmed && _allowedTags.contains('<CMD_SYS_LOC_TRG:')) {
+        final locationKey = geofenceMatch.group(1)?.trim() ?? '';
+        final taskDesc =
+            geofenceMatch.group(2)?.trim() ?? 'Recordatorio de ubicación';
+        onGeofenceDetected?.call(locationKey, taskDesc);
+      }
     }
 
     final calMatch = calendarRegex.firstMatch(cleanBuffer.toString());
     if (calMatch != null) {
-      final dateStr = calMatch.group(1)?.trim() ?? '';
-      final timeStr = calMatch.group(2)?.trim() ?? '17:00';
-      final isBirthdayStr = calMatch.group(3)?.trim().toLowerCase() ?? 'false';
-      final titleStr = calMatch.group(4)?.trim() ?? 'Evento';
+      final tag = calMatch.group(0)!;
+      _stripTag(tag);
 
-      _stripTag(calMatch.group(0)!);
+      if (_isArmed && _allowedTags.contains('<CMD_SYS_CAL_EVT:')) {
+        final dateStr = calMatch.group(1)?.trim() ?? '';
+        final timeStr = calMatch.group(2)?.trim() ?? '17:00';
+        final isBirthdayStr = calMatch.group(3)?.trim().toLowerCase() ?? 'false';
+        final titleStr = calMatch.group(4)?.trim() ?? 'Evento';
 
-      final isBirthday = isBirthdayStr == 'true';
-      int reminderMins = (isBirthday || timeStr == '17:00') ? 60 : 0;
+        final isBirthday = isBirthdayStr == 'true';
+        int reminderMins = (isBirthday || timeStr == '17:00') ? 60 : 0;
 
-      onCalendarDetected?.call({
-        'action': 'add',
-        'title': titleStr,
-        'date': dateStr,
-        'time': timeStr,
-        'reminder_minutes': reminderMins,
-        'is_all_day': isBirthday,
-        'is_birthday': isBirthday,
-      });
+        onCalendarDetected?.call({
+          'action': 'add',
+          'title': titleStr,
+          'date': dateStr,
+          'time': timeStr,
+          'reminder_minutes': reminderMins,
+          'is_all_day': isBirthday,
+          'is_birthday': isBirthday,
+        });
+      }
     }
 
     // ── 4. UI Text Formatting (Flicker Prevention) ─────────────────────────
@@ -145,14 +169,14 @@ class ToolParser {
         .replaceAll(calendarRegex, '');
 
     // Avoid partial tags appearing in the UI
-    uiText = uiText.replaceAll(RegExp(r'<GEOFENCE:[^>]*$'), '');
-    uiText = uiText.replaceAll(RegExp(r'<CALENDAR:[^>]*$'), '');
+    uiText = uiText.replaceAll(RegExp(r'<CMD_SYS_LOC_TRG:[^>]*$'), '');
+    uiText = uiText.replaceAll(RegExp(r'<CMD_SYS_CAL_EVT:[^>]*$'), '');
 
     final possibleTags = [
       startVideoTag,
       stopVideoTag,
-      '<GEOFENCE:',
-      '<CALENDAR:',
+      '<CMD_SYS_LOC_TRG:',
+      '<CMD_SYS_CAL_EVT:',
     ];
 
     for (final tag in possibleTags) {

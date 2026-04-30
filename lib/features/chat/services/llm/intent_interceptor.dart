@@ -6,9 +6,9 @@ import 'package:flutter/foundation.dart';
 class IntentInterceptor {
   // ─── Dictionaries & Regex Patterns ────────────────────────────────────────
 
-  // Hardware Keywords
+  // Hardware Keywords (Flexibilidad para tildes y formas de decirlo)
   static final RegExp _hardwareRegex = RegExp(
-    r'\b(toma video|graba|empieza a grabar video|record video)\b',
+    r'\b(toma video|tomar video|graba|grabar|grabame|grábame|empieza a grabar|pon a grabar|record video)\b',
     caseSensitive: false,
     unicode: true,
   );
@@ -21,44 +21,49 @@ class IntentInterceptor {
   );
 
   static final RegExp _calendarQueryVerbsRegex = RegExp(
-    r'\b(qué tengo|que tengo|dime|revisa|what do i have|check)\b',
+    r'\b(qu[eé] tengo|dime|revisa|what do i have|check)\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // Action Verbs for Calendar (with optional clitic pronouns)
+  // Action Verbs for Calendar (with optional clitic pronouns 'me', 'lo', etc.)
   static final RegExp _calendarActionVerbsRegex = RegExp(
-    r'\b(agrega|pon|add|schedule)(?:lo|la|los|las|le|les)?\b',
+    r'\b(agrega|pon|add|schedule|apunta|anota|guarda)(?:lo|la|los|las|le|les|me)?\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // Geofence Keywords
+  // Geofence Keywords (Slang norteño/fronterizo, sin tildes, El Paso/Juárez)
   static final RegExp _geofenceLocationRegex = RegExp(
-    r'\b(work|home|walmart|hooters|whataburger|trabajo|casa|oficina)\b',
+    r'\b(work|home|walmart|hooters|whataburger|trabajo|casa|oficina|jale|chamba|cant[oó]n|el paso|ju[aá]rez|chuco)\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // General Action Verbs used in both Geofence and Calendar (with optional clitic pronouns)
+  // Spatial Triggers (Gatillos espaciales clave para geocercas)
+  static final RegExp _geofenceTriggersRegex = RegExp(
+    r'\b(llegando|llegar|llegue|cuando ande|en cuanto llegue|al llegar)\b',
+    caseSensitive: false,
+    unicode: true,
+  );
+
+  // General Action Verbs used in both Geofence and Calendar
+  // Incluye "recordatorio", modismos como "tira paro", "echame un grito"
   static final RegExp _actionVerbsRegex = RegExp(
-    r'\b(avísame|avisame|recuérdame|recuerdame|remind|notify|tell)(?:lo|la|los|las|le|les)?\b',
+    r'\b(av[ií]same|recu[eé]rdame|remind|notify|tell|acu[eé]rdame|recordatorio|avisa|recuerda|acuerda|tira paro|hazme el paro|echame un grito|[eé]chame un grito)(?:lo|la|los|las|le|les|me)?\b',
     caseSensitive: false,
     unicode: true,
   );
 
   // Implicit Time Markers
   static final RegExp _timeMarkersRegex = RegExp(
-    r'\b(mañana|manana|hoy|a las|pm|am|viernes|tomorrow|today)\b',
+    r'\b(ma[ñn]ana|hoy|a las|pm|am|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tomorrow|today)\b',
     caseSensitive: false,
     unicode: true,
   );
 
   // ─── Main Intercept Method ────────────────────────────────────────────────
 
-  /// Analyzes the [originalPrompt] and prepends a cumulative `[SYSTEM HINT: ...]`
-  /// if it matches criteria for hardware, calendar, or geofence routing.
-  /// If no criteria are met, returns the prompt unmodified.
   static String processPrompt(String originalPrompt) {
     final lowerPrompt = originalPrompt.toLowerCase();
     final List<String> hints = [];
@@ -66,21 +71,24 @@ class IntentInterceptor {
     // 1. HARDWARE (Evaluated first, does not block others)
     if (_hardwareRegex.hasMatch(lowerPrompt)) {
       debugPrint('🧠 [IntentInterceptor] Hardware match detected.');
-      hints.add('USE <START_VIDEO>');
+      hints.add('USE <CMD_SYS_OPTICS_1>');
     }
 
     bool geofenceDetected = false;
 
-    // 2. GEOFENCE (Evaluated before Calendar to enforce Space Override)
+    // 2. GEOFENCE
+    // Dispara si encuentra el lugar (jale, cantón) Y alguna acción, gatillo espacial o verbo de agenda (ej. "ponme" + "cuando llegue")
     if (_geofenceLocationRegex.hasMatch(lowerPrompt) &&
-        _actionVerbsRegex.hasMatch(lowerPrompt)) {
+        (_actionVerbsRegex.hasMatch(lowerPrompt) ||
+            _geofenceTriggersRegex.hasMatch(lowerPrompt) ||
+            (_calendarActionVerbsRegex.hasMatch(lowerPrompt) &&
+                _geofenceTriggersRegex.hasMatch(lowerPrompt)))) {
       debugPrint('🧠 [IntentInterceptor] Geofence match detected.');
-      hints.add('USE <GEOFENCE>. SPACE ALWAYS WINS.');
+      hints.add('USE <CMD_SYS_LOC_TRG>. SPACE ALWAYS WINS.');
       geofenceDetected = true;
     }
 
     // 3. CALENDAR (Explicit and Implicit)
-    // Enforce Space Override Rule: Do NOT add Calendar hints if Geofence is detected.
     if (!geofenceDetected) {
       if (_explicitCalendarRegex.hasMatch(lowerPrompt)) {
         if (_calendarQueryVerbsRegex.hasMatch(lowerPrompt)) {
@@ -97,7 +105,6 @@ class IntentInterceptor {
           );
           hints.add('USE manage_calendar');
         } else {
-          // If it mentions calendar but lacks a clear action verb, default to chat
           debugPrint(
             '🧠 [IntentInterceptor] Explicit Calendar (No Action) match detected.',
           );
@@ -118,7 +125,6 @@ class IntentInterceptor {
       return originalPrompt;
     }
 
-    // Join cumulative hints with a pipe separator
     final combinedHints = hints.join(' | ');
     return '[SYSTEM HINT: $combinedHints]\n\n$originalPrompt';
   }

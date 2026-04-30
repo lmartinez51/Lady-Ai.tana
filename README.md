@@ -7,7 +7,8 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Local LLM Inference**: Runs Google's Gemma models directly on-device using LiteRT, with support for hot-swapping between different model variants (e.g., standard assistant vs. "Real Assistant" persona).
 - **Advanced Context Management**: Multi-model prompt routing architecture that dynamically injects calendar, time, and persistent memory context into the prompt while maintaining distinct personas.
 - **Intent Interceptor Architecture**: Pre-processes user inputs using regular expressions (with robust support for Spanish enclitic pronouns) to inject system hints and optimize LLM reasoning.
-- **Calendar & Task Management**: Parses strict `<CALENDAR>` tags from LLM responses to trigger native Android calendar and alarm APIs via MethodChannels.
+- **Calendar & Task Management**: Parses secure `<CMD_SYS_CAL_EVT>` tags from LLM responses to trigger native Android calendar and alarm APIs via MethodChannels.
+- **Tool Gating & Injection Security**: Implements a "Smart System Terminal Protocol" that prevents unauthorized or hallucinated tool calls by arming the response parser only when specific system hints are present in the context.
 - **Hybrid Geofencing System**: Total synchronization between native Android Geofencing APIs and local ObjectBox persistence. Features a robust two-way handshake, background event processing, idempotency guards, and interactive developer controls.
 - **OOM Blocking Architecture ("The Armor")**: A state-of-the-art UI blocking mechanism that prevents Out of Memory (OOM) crashes by freezing interactions and displaying system lock overlays during high-RAM LLM operations (e.g., model loading, summarization).
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
@@ -56,5 +57,12 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 
 ## Architecture Notes
 - **Modular Service Layer**: Business logic for prompt construction (`PromptManager`) and tag parsing (`ToolParser`) is decoupled from the inference orchestration, adhering to SRP.
+- **Secure Tool Gating**: Uses an `IntentInterceptor` to identify user requests for hardware or system tools and injects specific authorizations into the prompt. The `ToolParser` is dynamically armed for each turn, ensuring that the LLM cannot trigger events unless explicitly authorized by the preceding system hint.
 - **Holy Grail UI Pattern**: Chat history uses an optimized `ListView.builder` with `reverse: true`, ensuring $O(1)$ visual updates and native keyboard interaction without list cloning.
 - **Geofencing State**: Geofence metadata is managed locally via ObjectBox to ensure consistency with Android's system-level geofence triggers, surviving device reboots and app restarts.
+
+## Testing & Compatibility
+
+The application, including its core LiteRT local LLM inference engine and native geofencing services, has been actively tested and verified on the following hardware:
+
+- **Google Pixel 10 Pro**: Fully verified for model hot-swapping, concurrent tool execution, and background geofence processing.

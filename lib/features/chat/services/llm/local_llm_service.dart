@@ -100,13 +100,14 @@ class LocalLlmService {
   /// of the system instruction string. This activates the model's built-in
   /// thought channel for the entire session without requiring per-turn prefixes.
 
-  static Future<String> _buildSystemPrompt() async {
+  static Future<String> _buildSystemPrompt([String? armedToolHint]) async {
     return PromptManager.buildSystemPrompt(
       modelBaseName: currentModel.value.baseName,
       isEnglishDemoMode: isEnglishDemoMode,
       activeSessionSummary: activeSessionSummary,
       getTodayEvents: () => CalendarService().getTodayEvents(),
       enableThinking: _currentParams.enableThinking,
+      armedToolHint: armedToolHint,
     );
   }
 
@@ -431,6 +432,7 @@ class LocalLlmService {
       return 'Procesando...';
     }
 
+    ToolParser? toolParser;
     try {
       _isGenerating = true;
 
@@ -449,9 +451,33 @@ class LocalLlmService {
       }
       debugPrint('⚙️ [LocalLlmService] Active params: $_currentParams');
 
-      final completer = Completer<String>();
+      final interceptedPrompt = IntentInterceptor.processPrompt(prompt);
 
-      final toolParser = ToolParser(
+      // ── Layer 1 & 2: Gating & Dynamic Injection ─────────────────────────
+      String? toolHint;
+      final List<String> allowedTags = [];
+
+      if (interceptedPrompt.startsWith('[SYSTEM HINT:')) {
+        final closingBracket = interceptedPrompt.indexOf(']');
+        if (closingBracket != -1) {
+          toolHint = interceptedPrompt.substring(0, closingBracket + 1);
+          // Optics
+          if (toolHint.contains('<CMD_SYS_OPTICS_1>')) {
+            allowedTags.add('<CMD_SYS_OPTICS_1>');
+            allowedTags.add('<CMD_SYS_OPTICS_0>');
+          }
+          // Geofence
+          if (toolHint.contains('<CMD_SYS_LOC_TRG')) {
+            allowedTags.add('<CMD_SYS_LOC_TRG:');
+          }
+          // Calendar
+          if (toolHint.contains('manage_calendar')) {
+            allowedTags.add('<CMD_SYS_CAL_EVT:');
+          }
+        }
+      }
+
+      toolParser = ToolParser(
         onCommandDetected: onCommandDetected,
         onGeofenceDetected: (location, task) {
           GeofenceService().addGeofenceByName(
@@ -470,6 +496,11 @@ class LocalLlmService {
         },
       );
 
+      if (allowedTags.isNotEmpty) {
+        toolParser.armParser(allowedTags);
+      }
+
+      final completer = Completer<String>();
       _activeSubscription?.cancel(); // Cancel any stale subscription first.
       _activeSubscription = _stream.listen(
         (event) {
@@ -479,12 +510,12 @@ class LocalLlmService {
             _activeSubscription?.cancel();
             _activeSubscription = null;
             if (!completer.isCompleted) {
-              completer.complete(toolParser.getFinalCleanText());
+              completer.complete(toolParser?.getFinalCleanText() ?? '');
             }
             return;
           }
 
-          final uiText = toolParser.parseToken(token);
+          final uiText = toolParser?.parseToken(token) ?? '';
           onTokenUpdate?.call(uiText);
         },
         onError: (error) {
@@ -495,8 +526,7 @@ class LocalLlmService {
       );
 
       // ── Dispatch the MethodChannel call for the correct modality ─────────────
-      final systemPrompt = await _buildSystemPrompt();
-      final interceptedPrompt = IntentInterceptor.processPrompt(prompt);
+      final systemPrompt = await _buildSystemPrompt(toolHint);
 
       if (audioPath != null && audioPath.isNotEmpty) {
         const audioDirective = PromptManager.audioDirective;
@@ -526,7 +556,7 @@ class LocalLlmService {
         const Duration(seconds: 60),
         onTimeout: () {
           _activeSubscription?.cancel();
-          final partial = toolParser.getFinalCleanText();
+          final partial = toolParser?.getFinalCleanText() ?? '';
           return partial.isNotEmpty
               ? '$partial... [Timeout]'
               : 'Sorry, my processor exceeded the time limit.';
@@ -556,7 +586,7 @@ class LocalLlmService {
       debugPrint('🔴 [LocalLlmService] Error inesperado en runInference: $e');
       return 'Error: $e';
     } finally {
-      // Null the class-level reference so no stale closure can fire.
+      toolParser?.disarmParser();
       _activeSubscription = null;
       _isGenerating = false;
     }
