@@ -1,0 +1,34 @@
+[
+  {
+    "prompt": "Push my changes to github and update the readme if needed.",
+    "expected_actions": [
+      "git status",
+      "git diff",
+      "update README.md",
+      "git add .",
+      "git commit",
+      "git push"
+    ]
+  },
+  {
+    "prompt": "Sync the repo with the new geofencing feature I just built.",
+    "expected_actions": [
+      "git status",
+      "git diff",
+      "update README.md",
+      "git add .",
+      "git commit",
+      "git push"
+    ]
+  },
+  {
+    "prompt": "I'm done with the refactoring, commit and push it.",
+    "expected_actions": [
+      "git status",
+      "git diff",
+      "git add .",
+      "git commit",
+      "git push"
+    ]
+  }
+]

@@ -1,0 +1,28 @@
+[
+  {
+    "prompt": "Perform a comprehensive technical audit of the project and report back.",
+    "expected_actions": [
+      "list_dir",
+      "view_file",
+      "grep_search",
+      "generate_artifact"
+    ]
+  },
+  {
+    "prompt": "Check the architecture of the geofencing feature for scalability issues.",
+    "expected_actions": [
+      "list_dir",
+      "view_file",
+      "grep_search",
+      "generate_artifact"
+    ]
+  },
+  {
+    "prompt": "Find any security risks or hardcoded secrets in the codebase.",
+    "expected_actions": [
+      "grep_search",
+      "view_file",
+      "generate_artifact"
+    ]
+  }
+]
