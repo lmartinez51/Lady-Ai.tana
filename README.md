@@ -21,8 +21,9 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 
 ## Project Structure
 
-- `lib/features/chat/`: Core chat interface, LLM integration, and intent parsing.
+- `lib/features/chat/`: Core chat interface, specialized LLM sub-services (`PromptManager`, `ToolParser`), and input components.
 - `lib/core/theme/`: Shared styling, including the `SystemLockOverlay` ("Armor").
+- `lib/core/constants/`: Centralized native communication channels and shared identifiers.
 - `android/app/src/main/kotlin/...`: Native Android implementation for LiteRT tools, GeofenceBroadcastReceiver, and MethodChannel bridges.
 
 ## Getting Started
@@ -54,5 +55,6 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
    ```
 
 ## Architecture Notes
-- **OOM Prevention**: The application actively manages its memory footprint. The `LocalLlmService` exposes an `isEngineBusy` notifier that triggers the `SystemLockOverlay`, shielding the application from user input overload while the LLM processes data.
+- **Modular Service Layer**: Business logic for prompt construction (`PromptManager`) and tag parsing (`ToolParser`) is decoupled from the inference orchestration, adhering to SRP.
+- **Holy Grail UI Pattern**: Chat history uses an optimized `ListView.builder` with `reverse: true`, ensuring $O(1)$ visual updates and native keyboard interaction without list cloning.
 - **Geofencing State**: Geofence metadata is managed locally via ObjectBox to ensure consistency with Android's system-level geofence triggers, surviving device reboots and app restarts.

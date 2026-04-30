@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:aitana/core/constants/native_channels.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
 
@@ -57,7 +58,7 @@ class AuthProvider extends ChangeNotifier {
 
       // 🕵️‍♂️ PREGUNTAR A KOTLIN SI VENIMOS DE UN COMANDO DE VOZ
       try {
-        const platform = MethodChannel('com.lmartinez.aitana/aicore');
+        const platform = MethodChannel(NativeChannels.aiCore);
         _isWokenByNexus =
             await platform.invokeMethod('checkWakeSource') ?? false;
 

@@ -2,7 +2,6 @@ import 'dart:io';
 import 'dart:async';
 import 'package:aitana/core/domain/entities/chat_session.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -10,18 +9,20 @@ import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import 'package:record/record.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:aitana/core/theme/app_colors.dart';
-import 'package:aitana/features/chat/services/llm/models/llm_inference_params.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
-import 'package:aitana/features/chat/ui/widgets/audio_bubble.dart';
+import 'package:aitana/features/chat/ui/dialogs/settings_dialog_widget.dart';
 import 'package:aitana/features/auth/providers/auth_provider.dart';
 import 'package:aitana/features/chat/ui/widgets/exit_sequence_widget.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
+import 'package:aitana/features/chat/domain/entities/chat_message.dart';
+import 'package:aitana/features/chat/ui/widgets/chat_bubble_widget.dart';
+import 'package:aitana/features/chat/ui/widgets/voice_input_panel.dart';
 import 'package:aitana/core/theme/widgets/system_lock_overlay.dart';
+import 'package:aitana/core/constants/native_channels.dart';
+import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
 
 class MainChatScreen extends StatefulWidget {
   const MainChatScreen({super.key});
@@ -39,16 +40,27 @@ class _MainChatScreenState extends State<MainChatScreen>
   final FocusNode _focusNode = FocusNode();
 
   final ImagePicker _picker = ImagePicker();
-  final AudioRecorder _audioRecorder = AudioRecorder();
 
-  final List<ChatMessage> _messages = [];
+  final ValueNotifier<List<ChatMessage>> _messagesNotifier = ValueNotifier([]);
+  List<ChatMessage> get _messages => _messagesNotifier.value;
+
+  void _addMessage(ChatMessage msg) {
+    _messagesNotifier.value = List.from(_messagesNotifier.value)..add(msg);
+  }
+
+  void _clearMessages() {
+    _messagesNotifier.value = [];
+  }
+
+  void _notifyMessagesChanged() {
+    _messagesNotifier.value = List.from(_messagesNotifier.value);
+  }
 
   // --- ESTADO GLOBAL DE LA UI ---
   bool _isLoading = false;
   // ValueNotifier instead of a plain bool so typing never triggers a
   // full setState / rebuild of the TextField's RenderEditable subtree.
   final ValueNotifier<bool> _isTypingNotifier = ValueNotifier(false);
-  bool _isRecording = false;
   String? _selectedImagePath;
 
   // ─── Historial y Sesiones ──────────────────────────────────────────────────
@@ -69,30 +81,7 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// re-queued by a widget rebuild before the flag is consumed.
   bool _hasFiredAutoGreeting = false;
 
-  // --- VAD (Silence Detection) PARAMS ---
-  /// Amplitude floor that must be exceeded to initially classify audio as
-  /// speech. Set aggressively to reject car noise, AC units, and breathing.
-  final double _vadThreshold = -20.0;
-
-  /// Lower hysteresis bound used as the gate for resetting the trailing
-  /// silence timer after speech has been detected. A micro-spike of ambient
-  /// noise that stays below this level will NOT defer the submission countdown,
-  /// preventing the indefinite-hang symptom observed in vehicular environments.
-  final double _vadSpeechHysteresisDb = -28.0;
-
-  final int _vadSilenceDurationMs = 2500;
-  final int _vadInitialTimeoutMs = 7000;
-
   bool _isVoiceWakeSession = false;
-  bool _hasSpoken = false;
-  StreamSubscription<Amplitude>? _amplitudeSubscription;
-  Timer? _silenceTimer;
-
-  /// Absolute hard-stop timer. Regardless of noise or VAD state, cancels and
-  /// discards the recording after [_hardStopDurationS] seconds of total mic
-  /// time, preventing the microphone from ever hanging indefinitely.
-  Timer? _hardStopTimer;
-  static const int _hardStopDurationS = 20;
 
   // --- ESTADO DINÁMICO (PREPARACIÓN FASE 5) ---
   // Model state is now managed by LocalLlmService.currentModel
@@ -161,14 +150,6 @@ class _MainChatScreenState extends State<MainChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
-    _hardStopTimer?.cancel();
-    _silenceTimer?.cancel();
-    _amplitudeSubscription?.cancel();
-    // [Fix #4] _handleExit() eagerly disposes the AudioRecorder before pushing
-    // the shader overlay to prevent the Android HAL teardown race. If the exit
-    // sequence ran, _isExiting == true and the recorder is already disposed —
-    // calling dispose() a second time would throw on the record package.
-    if (!_isExiting) _audioRecorder.dispose();
     _isTypingNotifier.dispose();
     _textController.dispose();
     _scrollController.dispose();
@@ -208,10 +189,10 @@ class _MainChatScreenState extends State<MainChatScreen>
   Future<void> _checkForNexusWakeOnResume() async {
     if (!mounted) return;
     // Do not interrupt an active LLM inference or an ongoing recording session.
-    if (_isLoading || _isRecording) return;
+    if (_isLoading) return;
 
     try {
-      const channel = MethodChannel('com.lmartinez.aitana/aicore');
+      const channel = MethodChannel(NativeChannels.aiCore);
       final bool isWoken =
           await channel.invokeMethod<bool>('checkWakeSource') ?? false;
 
@@ -274,376 +255,23 @@ class _MainChatScreenState extends State<MainChatScreen>
 
   // ⚙️ EL RETO: DIÁLOGO DE CONFIGURACIÓN AVANZADA
   void _showSettingsDialog() {
-    // Variables temporales para no afectar el estado real hasta presionar OK
-    double tempTemp = _temperature;
-    double tempTopP = _topP;
-    int tempTopK = _topK;
-    bool tempThinking = _enableThinking;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext context) {
-        return StatefulBuilder(
-          // Aisla el refresco solo a esta ventana
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: AppColors.obsidian,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(20),
-                side: const BorderSide(color: AppColors.glassBorder, width: 1),
-              ),
-              title: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  const Text(
-                    "Model Parameters",
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontFamily: 'Outfit',
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  GestureDetector(
-                    onTap: () => _showParameterInfo(
-                      context,
-                      '🔥 Roast Protocol (Spicy Mode)',
-                      'Need to blow off some steam and start a digital bar fight? Dial in these settings for maximum emotional damage:\n\n• Temperature: 0.85 (Liquid courage)\n• Top K: 80 (Unlocks the forbidden dictionary)\n• Enable Thinking: ON (So she logically plots your demise)\n\nDisclaimer: Do not use these settings if you actually need to schedule something... or if you have a fragile ego.',
-                      actionLabel: 'ENGAGE SPICY MODE',
-                      onAction: () {
-                        setDialogState(() {
-                          tempTemp = 0.85;
-                          tempTopK = 80;
-                          tempThinking = true;
-                        });
-                      },
-                    ),
-                    behavior: HitTestBehavior.opaque,
-                    child: const Padding(
-                      padding: EdgeInsets.all(4.0),
-                      child: Icon(
-                        Icons.local_fire_department,
-                        color: Colors.deepOrangeAccent,
-                        size: 24,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // INFORMATIVO: ACCELERATOR
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: AppColors.deepIndigo.withAlpha(127),
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(
-                            Icons.memory,
-                            color: Colors.white54,
-                            size: 18,
-                          ),
-                          const SizedBox(width: 8),
-                          const Text(
-                            "Accelerator: ",
-                            style: TextStyle(
-                              color: Colors.white54,
-                              fontFamily: 'Outfit',
-                            ),
-                          ),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 2,
-                            ),
-                            decoration: BoxDecoration(
-                              color: AppColors.cyberBlue.withAlpha(40),
-                              borderRadius: BorderRadius.circular(4),
-                              border: Border.all(
-                                color: AppColors.cyberBlue.withAlpha(100),
-                                width: 0.5,
-                              ),
-                            ),
-                            child: const Text(
-                              "√ CPU",
-                              style: TextStyle(
-                                color: AppColors.cyberBlue,
-                                fontFamily: 'Outfit',
-                                fontWeight: FontWeight.bold,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-
-                    // ENABLE THINKING
-                    Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 8.0),
-                      child: Row(
-                        children: [
-                          const Text(
-                            "Enable thinking",
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontFamily: 'Outfit',
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          GestureDetector(
-                            onTap: () => _showParameterInfo(
-                              context,
-                              "Enable Thinking",
-                              'Forces the AI to reason internally before replying. Slower response, but much smarter logic.',
-                            ),
-                            behavior: HitTestBehavior.opaque,
-                            child: const Padding(
-                              padding: EdgeInsets.all(8.0),
-                              child: Icon(
-                                Icons.info_outline,
-                                size: 16,
-                                color: Colors.grey,
-                              ),
-                            ),
-                          ),
-                          const Spacer(),
-                          Switch(
-                            activeTrackColor: AppColors.cyberBlue,
-                            value: tempThinking,
-                            onChanged: (val) =>
-                                setDialogState(() => tempThinking = val),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const Divider(color: AppColors.glassBorder),
-
-                    // SLIDERS DINÁMICOS
-                    _ParameterSlider(
-                      label: "Temperature",
-                      tooltipMessage:
-                          'Controls randomness. Low (0.2): Strict & focused (Best for tools/tasks). High (0.8): Creative & chaotic (Best for roasting).',
-                      min: 0.0,
-                      max: 2.0,
-                      value: tempTemp,
-                      isDouble: true,
-                      onChanged: (val) => setDialogState(() => tempTemp = val),
-                    ),
-                    _ParameterSlider(
-                      label: "Top K",
-                      tooltipMessage:
-                          'Vocabulary pool size. Low: Uses common, safe words. High: Expands word choices, more dynamic.',
-                      min: 1,
-                      max: 100,
-                      value: tempTopK.toDouble(),
-                      isDouble: false,
-                      onChanged: (val) =>
-                          setDialogState(() => tempTopK = val.toInt()),
-                    ),
-                    _ParameterSlider(
-                      label: "Top P",
-                      tooltipMessage:
-                          'Probability threshold. Low: Predictable phrasing. High: Diverse and expressive sentence structures.',
-                      min: 0.0,
-                      max: 1.0,
-                      value: tempTopP,
-                      isDouble: true,
-                      onChanged: (val) => setDialogState(() => tempTopP = val),
-                    ),
-                  ],
-                ),
-              ),
-              // ── ACTIONS ROW ─────────────────────────────────────────────
-              // Uses a single Row widget so we can push "Reset" to the far
-              // left while keeping "Cancel" and "OK" on the right.
-              actionsAlignment: MainAxisAlignment.spaceBetween,
-              actions: [
-                // ── LEFT: Reset to defaults ──────────────────────────────
-                TextButton.icon(
-                  onPressed: () {
-                    // Reset ONLY the temp dialog state – does NOT close the
-                    // dialog or touch the native engine. The user must still
-                    // press OK to apply (which triggers the confirm dialog).
-                    setDialogState(() {
-                      tempTemp = const LlmInferenceParams().temperature;
-                      tempTopK = const LlmInferenceParams().topK;
-                      tempTopP = const LlmInferenceParams().topP;
-                      tempThinking = const LlmInferenceParams().enableThinking;
-                    });
-                  },
-                  icon: const Icon(
-                    Icons.restart_alt_rounded,
-                    size: 18,
-                    color: Colors.redAccent,
-                  ),
-                  label: const Text(
-                    'Reset',
-                    style: TextStyle(
-                      color: Colors.redAccent,
-                      fontFamily: 'Outfit',
-                    ),
-                  ),
-                ),
-
-                // ── RIGHT: Cancel + OK ───────────────────────────────────
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(context),
-                      child: const Text(
-                        'Cancel',
-                        style: TextStyle(
-                          color: Colors.white54,
-                          fontFamily: 'Outfit',
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.cyberBlue,
-                        foregroundColor: AppColors.obsidian,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      // ⚙️ Async: closes settings, optionally confirms memory
-                      // loss, then applies params and resets native session.
-                      onPressed: () async {
-                        // Close the settings dialog first to avoid a nested
-                        // modal stack (confusing back-gesture behaviour).
-                        Navigator.pop(context);
-
-                        // Only warn if there is history that would be erased.
-                        final bool hasHistory = _messages.isNotEmpty;
-
-                        if (hasHistory) {
-                          final bool? confirmed = await showDialog<bool>(
-                            context: context,
-                            barrierDismissible: false,
-                            builder: (BuildContext ctx) {
-                              return AlertDialog(
-                                backgroundColor: AppColors.obsidian,
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20),
-                                  side: const BorderSide(
-                                    color: AppColors.glassBorder,
-                                    width: 1,
-                                  ),
-                                ),
-                                title: const Row(
-                                  children: [
-                                    Icon(
-                                      Icons.warning_amber_rounded,
-                                      color: Colors.orangeAccent,
-                                      size: 22,
-                                    ),
-                                    SizedBox(width: 8),
-                                    Text(
-                                      'Clear Memory?',
-                                      style: TextStyle(
-                                        color: Colors.white,
-                                        fontFamily: 'Outfit',
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                                content: const Text(
-                                  'Applying new parameters will clear the '
-                                  'current conversation memory. Proceed?',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontFamily: 'Outfit',
-                                    height: 1.4,
-                                  ),
-                                ),
-                                actions: [
-                                  TextButton(
-                                    onPressed: () => Navigator.pop(ctx, false),
-                                    child: const Text(
-                                      'Cancel',
-                                      style: TextStyle(
-                                        color: Colors.white54,
-                                        fontFamily: 'Outfit',
-                                      ),
-                                    ),
-                                  ),
-                                  ElevatedButton(
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: Colors.orangeAccent,
-                                      foregroundColor: AppColors.obsidian,
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(12),
-                                      ),
-                                    ),
-                                    onPressed: () => Navigator.pop(ctx, true),
-                                    child: const Text(
-                                      'Proceed',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        fontFamily: 'Outfit',
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              );
-                            },
-                          );
-
-                          // User cancelled – abort without changing anything.
-                          if (confirmed != true) return;
-                        }
-
-                        // Apply params: update the service (fires native
-                        // resetConversation) then sync the UI state.
-                        await LocalLlmService.updateSamplerParams(
-                          LlmInferenceParams(
-                            temperature: tempTemp,
-                            topK: tempTopK,
-                            topP: tempTopP,
-                            enableThinking: tempThinking,
-                          ),
-                        );
-
-                        // Keep visible message list in sync with the reset
-                        // native session to avoid misleading context display.
-                        if (mounted) {
-                          setState(() {
-                            _temperature = tempTemp;
-                            _topP = tempTopP;
-                            _topK = tempTopK;
-                            _enableThinking = tempThinking;
-                            if (hasHistory) _messages.clear();
-                          });
-                        }
-                      },
-                      child: const Text(
-                        'OK',
-                        style: TextStyle(
-                          fontWeight: FontWeight.bold,
-                          fontFamily: 'Outfit',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            );
-          },
-        );
+    SettingsDialogWidget.show(
+      context,
+      initialTemp: _temperature,
+      initialTopP: _topP,
+      initialTopK: _topK,
+      initialThinking: _enableThinking,
+      hasHistory: _messages.isNotEmpty,
+      onApply: (temp, topP, topK, thinking, clearHistory) {
+        if (mounted) {
+          setState(() {
+            _temperature = temp;
+            _topP = topP;
+            _topK = topK;
+            _enableThinking = thinking;
+            if (clearHistory) _clearMessages();
+          });
+        }
       },
     );
   }
@@ -903,192 +531,31 @@ class _MainChatScreenState extends State<MainChatScreen>
     }
   }
 
-  /// Toggles the recording state.
-  ///
-  /// If currently recording, stops the recording.
-  /// If not recording, starts the recording.
-  ///
-  /// This method is called when the user taps the microphone button.
-  Future<void> _toggleRecording() async {
-    if (_isRecording) {
-      await _stopRecording();
-    } else {
-      await _startRecording();
-    }
-  }
+  /// Handles the audio recorded by the [VoiceInputPanel].
+  Future<void> _handleAudioRecorded(String path) async {
+    _addMessage(
+      ChatMessage(
+        text: "",
+        isUser: true,
+        audioPath: path,
+        audioDuration: "Audio",
+      ),
+    );
+    _addMessage(ChatMessage(text: "", isUser: false));
+    setState(() {
+      _isLoading = true;
+      _needsSaving = true;
+    });
+    _scrollToBottom();
 
-  /// Starts the audio recording.
-  ///
-  /// Checks for microphone permission before starting.
-  /// Updates the recording state and plays a startup beep sound.
-  ///
-  /// If permission is denied, shows an error message.
-  /// Logs errors to the debug console.
-  Future<void> _startRecording() async {
-    if (await _audioRecorder.hasPermission()) {
-      // Update UI first for immediate user feedback
-      setState(() {
-        _isRecording = true;
-        _hasSpoken = false;
-      });
+    final response = await LocalLlmService.runInference(
+      "Responde a la solicitud de Lorenzo.",
+      audioPath: path,
+      onTokenUpdate: _handleTokenUpdate,
+      onCommandDetected: _handleDeviceCommand,
+    );
 
-      // Haptic feedback
-      // vibrate() drives the haptic actuator at maximum strength — perceptible
-      // even through a car mount, and volume-independent by design.
-      HapticFeedback.vibrate();
-
-      // Audio feedback
-      // Short audible beep routed through the SYSTEM sonification stream.
-      final beepPlayer = AudioPlayer();
-      await beepPlayer.setAudioContext(
-        AudioContext(
-          android: AudioContextAndroid(
-            contentType: AndroidContentType.sonification,
-            usageType: AndroidUsageType.assistanceSonification,
-            audioFocus: AndroidAudioFocus.none,
-            isSpeakerphoneOn: false,
-          ),
-        ),
-      );
-      await beepPlayer.play(AssetSource('sounds/beep.wav'));
-      // beepPlayer is short-lived; audioplayers disposes it after playback.
-
-      // Critical step: "Grace Delay" (Anti-Acoustic Feedback Loop)
-      // Wait half a second for the sound to exit the speaker and the room
-      // to return to silence before "opening the ears" to the app.
-      await Future.delayed(const Duration(milliseconds: 500));
-
-      // ONLY AFTER the delay, start the real recording and VAD
-      final dir = await getTemporaryDirectory();
-      final filePath =
-          '${dir.path}/aitana_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
-
-      await _audioRecorder.start(
-        const RecordConfig(
-          encoder: AudioEncoder.wav,
-          sampleRate: 16000,
-          numChannels: 1,
-        ),
-        path: filePath,
-      );
-
-      // Absolute safety cap: discard and stop regardless of noise levels.
-      // Prevents the mic from staying open indefinitely in any edge case.
-      // _hardStopDurationS se asume definido como constante en tu clase (ej. 20)
-      _hardStopTimer = Timer(const Duration(seconds: _hardStopDurationS), () {
-        debugPrint('⏱️ VAD hard-stop triggered after 20s.');
-        if (_isRecording && mounted) _stopRecording(cancelAndDiscard: true);
-      });
-
-      _amplitudeSubscription = _audioRecorder
-          .onAmplitudeChanged(const Duration(milliseconds: 100))
-          .listen((Amplitude amplitude) {
-            if (amplitude.current > _vadThreshold) {
-              // ── Active speech (above -20 dB) ──────────────────────────────
-              // Clears any pending timer and marks speech as detected.
-              _silenceTimer?.cancel();
-              _silenceTimer = null;
-              _hasSpoken = true;
-            } else {
-              // ── Below speech gate (quieter than -20 dB) ───────────────────
-              if (_hasSpoken) {
-                // Post-speech silence window.
-                // HYSTERESIS: only restart the trailing timer if the sample also
-                // clears the lower _vadSpeechHysteresisDb gate (-28 dB).
-                if (amplitude.current > _vadSpeechHysteresisDb) {
-                  // Genuine transient sound (between -28 and -20 dB) — restart.
-                  _silenceTimer?.cancel();
-                  _silenceTimer = Timer(
-                    Duration(milliseconds: _vadSilenceDurationMs),
-                    () {
-                      if (_isRecording && mounted) _stopRecording();
-                    },
-                  );
-                } else {
-                  // Pure ambient noise (below -28 dB) — do NOT restart the timer.
-                  _silenceTimer ??= Timer(
-                    Duration(milliseconds: _vadSilenceDurationMs),
-                    () {
-                      if (_isRecording && mounted) _stopRecording();
-                    },
-                  );
-                }
-              } else {
-                // Pre-speech silence: arm the initial no-speech timeout exactly
-                // once. The above-threshold branch cancels it if speech arrives.
-                _silenceTimer ??= Timer(
-                  Duration(milliseconds: _vadInitialTimeoutMs),
-                  () {
-                    if (_isRecording && mounted) {
-                      _stopRecording(cancelAndDiscard: true);
-                    }
-                  },
-                );
-              }
-            }
-          });
-    } else {
-      debugPrint('🔴 Microphone permission denied.');
-    }
-  }
-
-  /// Stops the audio recording.
-  ///
-  /// Cancels any pending timers and the amplitude subscription.
-  /// Saves the recording if it's valid (not cancelled), otherwise discards it.
-  ///
-  /// [cancelAndDiscard]: If true, the recording is discarded immediately.
-  ///
-  /// This method is called automatically when speech is detected or when
-  /// the hard stop timer expires.
-  ///
-  /// Logs errors to the debug console.
-  Future<void> _stopRecording({bool cancelAndDiscard = false}) async {
-    _hardStopTimer?.cancel();
-    _hardStopTimer = null;
-    _silenceTimer?.cancel();
-    _silenceTimer = null;
-    await _amplitudeSubscription?.cancel();
-    _amplitudeSubscription = null;
-
-    final String? path = await _audioRecorder.stop();
-    if (path != null) {
-      if (cancelAndDiscard) {
-        // Delete the orphaned temp WAV to prevent accumulation of
-        // discarded recordings in the device's temporary storage.
-        try {
-          final file = File(path);
-          if (await file.exists()) await file.delete();
-        } catch (e) {
-          debugPrint('⚠️ Could not delete discarded temp audio: $e');
-        }
-        if (mounted) setState(() => _isRecording = false);
-      } else {
-        setState(() {
-          _isRecording = false;
-          _messages.add(
-            ChatMessage(
-              text: "",
-              isUser: true,
-              audioPath: path,
-              audioDuration: "Audio",
-            ),
-          );
-          _messages.add(ChatMessage(text: "", isUser: false));
-          _isLoading = true;
-        });
-        _scrollToBottom();
-
-        final response = await LocalLlmService.runInference(
-          "Responde a la solicitud de Lorenzo.",
-          audioPath: path,
-          onTokenUpdate: _handleTokenUpdate,
-          onCommandDetected: _handleDeviceCommand,
-        );
-
-        _finalizeResponse(response);
-      }
-    }
+    _finalizeResponse(response);
   }
 
   /// Sends a message to the AI.
@@ -1119,11 +586,9 @@ class _MainChatScreenState extends State<MainChatScreen>
       _focusNode.unfocus();
     }
 
+    _addMessage(ChatMessage(text: text, isUser: true, imagePath: imagePath));
+    _addMessage(ChatMessage(text: "", isUser: false));
     setState(() {
-      _messages.add(
-        ChatMessage(text: text, isUser: true, imagePath: imagePath),
-      );
-      _messages.add(ChatMessage(text: "", isUser: false));
       _isLoading = true;
       _needsSaving = true; // 👈 ¡NUESTRA BANDERA DE GUARDADO!
     });
@@ -1156,13 +621,13 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// Logs errors to the debug console.
   void _handleTokenUpdate(String accumulatedText) {
     if (mounted) {
-      setState(() {
-        // Solo apagamos la animación si ya hay texto real para mostrar
-        if (accumulatedText.trim().isNotEmpty) {
+      if (accumulatedText.trim().isNotEmpty && _isLoading) {
+        setState(() {
           _isLoading = false;
-        }
-        _messages.last.text = accumulatedText;
-      });
+        });
+      }
+      _messages.last.text = accumulatedText;
+      _notifyMessagesChanged();
       _scrollToBottom();
     }
   }
@@ -1171,7 +636,7 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// All tag stripping has already occurred in the service layer, so
   /// this method only manages native channel invocations and UI feedback.
   Future<void> _handleDeviceCommand(String command) async {
-    const channel = MethodChannel('com.lmartinez.aitana/aicore');
+    const channel = MethodChannel(NativeChannels.aiCore);
     if (command == 'START_VIDEO') {
       try {
         await channel.invokeMethod('startVideoRecording');
@@ -1315,16 +780,14 @@ class _MainChatScreenState extends State<MainChatScreen>
 
     // Display the "Oracle Bubble" on the screen
     if (mounted) {
-      setState(() {
-        _messages.clear();
-        _messages.add(
-          ChatMessage(
-            text: "Memoria del sistema:\n${session.summary}",
-            isUser: false,
-            isSystemOracle: true,
-          ),
-        );
-      });
+      _clearMessages();
+      _addMessage(
+        ChatMessage(
+          text: "Memoria del sistema:\n${session.summary}",
+          isUser: false,
+          isSystemOracle: true,
+        ),
+      );
     }
     debugPrint("🕰️ Viaje en el tiempo exitoso. Sesión ${session.id} cargada.");
   }
@@ -1437,8 +900,8 @@ class _MainChatScreenState extends State<MainChatScreen>
       await LocalLlmService.clearContext();
       LocalLlmService.activeSessionSummary = '';
       if (mounted) {
+        _clearMessages();
         setState(() {
-          _messages.clear();
           _currentSessionId = null;
           _needsSaving = false;
         });
@@ -1458,20 +921,19 @@ class _MainChatScreenState extends State<MainChatScreen>
 
       setState(() {
         _isLoading = false;
-        // Solo actualizamos si quedó texto real después de limpiar
-        if (cleanText.isNotEmpty) {
-          _messages.last.text = cleanText;
-        } else {
-          // Si el modelo SOLO escupió el tag (sin decir "órale ya grabo"),
-          // le ponemos un mensaje por defecto o lo dejamos vacío.
-          _messages.last.text = "Acción ejecutada.";
-        }
       });
+      if (cleanText.isNotEmpty) {
+        _messages.last.text = cleanText;
+      } else {
+        _messages.last.text = "Acción ejecutada.";
+      }
+      _notifyMessagesChanged();
       _scrollToBottom();
 
       if (_isVoiceWakeSession) {
         _isVoiceWakeSession = false;
-        _startRecording();
+        // Por hacer: Trigger recording via VoiceInputPanel if needed.
+        // For now, we skip auto-recording to maintain stability.
       }
     }
   }
@@ -1489,18 +951,8 @@ class _MainChatScreenState extends State<MainChatScreen>
 
     FocusManager.instance.primaryFocus?.unfocus();
 
-    // Detén audio primero para evitar carreras con el hardware.
-    if (_isRecording) {
-      _hardStopTimer?.cancel();
-      _silenceTimer?.cancel();
-      await _amplitudeSubscription?.cancel();
-      _amplitudeSubscription = null;
-      await _audioRecorder.stop();
-
-      if (mounted) {
-        setState(() => _isRecording = false);
-      }
-    }
+    // Recording stop is now handled by the VoiceInputPanel's own lifecycle
+    // or through shared state if we implement a controller.
 
     // 1. Iniciamos el cleanup (que asumo incluye tu guardado LENTO y seguro)
     // OJO: Quitamos el unawaited y guardamos la promesa en una variable.
@@ -1626,8 +1078,8 @@ class _MainChatScreenState extends State<MainChatScreen>
                             await _saveCurrentSessionIfNeeded(); // Guarda si había algo a medias
                             await LocalLlmService.clearContext(); // Limpia el LLM
                             if (mounted) {
+                              _clearMessages();
                               setState(() {
-                                _messages.clear(); // Limpia la pantalla
                                 _currentSessionId = null; // ID a 0
                                 _needsSaving = false;
                               });
@@ -2004,303 +1456,39 @@ class _MainChatScreenState extends State<MainChatScreen>
           ),
           body: Column(
             children: [
-              // ── FLOATING PILL HEADER (M3 Search Bar layout) ──────────────────
-              SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 8, 8, 4),
-                  child: ValueListenableBuilder<bool>(
-                    valueListenable: DeviceEventService.isVideoRecording,
-                    builder: (context, isRecordingVideo, _) {
-                      return Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          // ── FAR LEFT: Hamburger (outside pill) ─────────────────
-                          IconButton(
-                            icon: const Icon(
-                              Icons.menu_rounded,
-                              color: AppColors.textMedium,
-                            ),
-                            onPressed: () =>
-                                _scaffoldKey.currentState?.openDrawer(),
-                            tooltip: 'Menu',
-                          ),
-                          const SizedBox(width: 4),
-
-                          // ── MIDDLE: Animated Pill ───────────────────────────────
-                          Expanded(
-                            child: AnimatedContainer(
-                              duration: const Duration(milliseconds: 400),
-                              curve: Curves.easeInOut,
-                              height: 46,
-                              decoration: BoxDecoration(
-                                color: AppColors.deepIndigo,
-                                borderRadius: BorderRadius.circular(50),
-                                border: Border.all(
-                                  color: isRecordingVideo
-                                      ? Colors.redAccent.withAlpha(120)
-                                      : AppColors.glassBorder,
-                                  width: isRecordingVideo ? 1.5 : 1.0,
-                                ),
-                                boxShadow: isRecordingVideo
-                                    ? [
-                                        BoxShadow(
-                                          color: Colors.redAccent.withAlpha(80),
-                                          blurRadius: 18,
-                                          spreadRadius: 2,
-                                        ),
-                                        BoxShadow(
-                                          color: Colors.redAccent.withAlpha(40),
-                                          blurRadius: 40,
-                                          spreadRadius: 4,
-                                        ),
-                                      ]
-                                    : [
-                                        BoxShadow(
-                                          color: Colors.black.withAlpha(60),
-                                          blurRadius: 12,
-                                          offset: const Offset(0, 4),
-                                        ),
-                                      ],
-                              ),
-                              // Pill contents: centered title + status LEDs only
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(50),
-                                  onTap: _showModelSelector,
-                                  onLongPress: () {
-                                    showModalBottomSheet(
-                                      context: context,
-                                      backgroundColor: Colors.transparent,
-                                      isScrollControlled: true,
-                                      shape: const RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.vertical(
-                                          top: Radius.circular(24),
-                                        ),
-                                      ),
-                                      builder: (_) => const DevGeofenceModal(),
-                                    );
-                                  },
-                                  child: ValueListenableBuilder<String>(
-                                    valueListenable: LocalLlmService.status,
-                                    builder: (context, status, _) {
-                                      Color modelColor = Colors.white;
-                                      if (status == 'loading') {
-                                        modelColor = Colors.orangeAccent;
-                                      } else if (status == 'error') {
-                                        modelColor = Colors.redAccent;
-                                      } else if (status == 'ready') {
-                                        modelColor = Colors.white;
-                                      } else if (status == 'idle') {
-                                        modelColor = Colors.white;
-                                      }
-                                      return Row(
-                                        mainAxisAlignment:
-                                            MainAxisAlignment.center,
-                                        children: [
-                                          Flexible(
-                                            child:
-                                                ValueListenableBuilder<
-                                                  AiModelInfo
-                                                >(
-                                                  valueListenable:
-                                                      LocalLlmService
-                                                          .currentModel,
-                                                  builder:
-                                                      (
-                                                        context,
-                                                        currentModel,
-                                                        _,
-                                                      ) {
-                                                        return Text(
-                                                          'Lady Ai.tana (${currentModel.shortName})',
-                                                          style: TextStyle(
-                                                            color: modelColor,
-                                                            fontFamily:
-                                                                'Outfit',
-                                                            fontWeight:
-                                                                FontWeight.w600,
-                                                            fontSize: 14,
-                                                          ),
-                                                          overflow: TextOverflow
-                                                              .ellipsis,
-                                                        );
-                                                      },
-                                                ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          // 📶 Wi-Fi status icon
-                                          ValueListenableBuilder<bool>(
-                                            valueListenable:
-                                                NetworkService.isOnline,
-                                            builder: (context, isOnline, _) {
-                                              return Tooltip(
-                                                message: isOnline
-                                                    ? 'Online'
-                                                    : 'Offline',
-                                                child: Icon(
-                                                  Icons.wifi,
-                                                  size: 16,
-                                                  color: isOnline
-                                                      ? const Color(0xFF00E676)
-                                                      : Colors.grey[600],
-                                                ),
-                                              );
-                                            },
-                                          ),
-                                          // 🔴 Video recording icon (only when active)
-                                          if (isRecordingVideo) ...[
-                                            const SizedBox(width: 6),
-                                            Tooltip(
-                                              message: 'Grabando video',
-                                              child: Icon(
-                                                Icons.fiber_manual_record,
-                                                size: 14,
-                                                color: Colors.redAccent
-                                                    .withAlpha(220),
-                                              ),
-                                            ),
-                                          ],
-                                        ],
-                                      );
-                                    },
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-
-                          // ── FAR RIGHT: Royal Avatar (outside pill) ─────────────
-                          PopupMenuButton<String>(
-                            tooltip: 'More options',
-                            color: AppColors.deepIndigo,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(14),
-                              side: const BorderSide(
-                                color: AppColors.glassBorder,
-                                width: 1,
-                              ),
-                            ),
-                            offset: const Offset(0, 52),
-                            onSelected: (value) {
-                              if (value == 'clear_memory') {
-                                LocalLlmService.clearContext();
-                                if (mounted) {
-                                  setState(() {
-                                    _messages.clear();
-                                    _currentSessionId = null;
-                                    _needsSaving = false;
-                                  });
-                                }
-                                LocalLlmService.activeSessionSummary = '';
-                                _refreshHistory();
-                              } else if (value == 'switch_model') {
-                                _showModelSelector();
-                              } else if (value == 'exit') {
-                                WidgetsBinding.instance.addPostFrameCallback((
-                                  _,
-                                ) {
-                                  if (mounted) {
-                                    _handleExit();
-                                  }
-                                });
-                              }
-                            },
-                            itemBuilder: (BuildContext ctx) =>
-                                <PopupMenuEntry<String>>[
-                                  const PopupMenuItem<String>(
-                                    value: 'switch_model',
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.swap_horiz_rounded,
-                                          color: AppColors.cyberBlue,
-                                          size: 20,
-                                        ),
-                                        SizedBox(width: 12),
-                                        Text(
-                                          'Switch Model',
-                                          style: TextStyle(
-                                            color: Colors.white,
-                                            fontFamily: 'Outfit',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const PopupMenuItem<String>(
-                                    value: 'clear_memory',
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.cleaning_services_rounded,
-                                          color: Colors.redAccent,
-                                          size: 20,
-                                        ),
-                                        SizedBox(width: 12),
-                                        Text(
-                                          'Clear Memory',
-                                          style: TextStyle(
-                                            color: Colors.redAccent,
-                                            fontFamily: 'Outfit',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                  const PopupMenuDivider(height: 1),
-                                  const PopupMenuItem<String>(
-                                    value: 'exit',
-                                    child: Row(
-                                      children: [
-                                        Icon(
-                                          Icons.power_settings_new_rounded,
-                                          color: Colors.redAccent,
-                                          size: 20,
-                                        ),
-                                        SizedBox(width: 12),
-                                        Text(
-                                          'Exit',
-                                          style: TextStyle(
-                                            color: Colors.redAccent,
-                                            fontFamily: 'Outfit',
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                ],
-                            // Royal gold border wrapping the avatar
-                            child: Container(
-                              decoration: const BoxDecoration(
-                                shape: BoxShape.circle,
-                                border: Border.fromBorderSide(
-                                  BorderSide(
-                                    color: Color(0xFFEA4335),
-                                    width: 2.5,
-                                  ),
-                                ),
-                              ),
-                              child: CircleAvatar(
-                                radius: 19,
-                                backgroundColor: AppColors.cyberBlue.withAlpha(
-                                  40,
-                                ),
-                                backgroundImage: const AssetImage(
-                                  'assets/images/aitana_avatar.webp',
-                                ),
-                                onBackgroundImageError:
-                                    (exception, stackTrace) {},
-                              ),
-                            ),
-                          ),
-                        ],
-                      );
-                    },
-                  ),
-                ),
+              ChatHeaderWidget(
+                onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
+                onModelSelectorPressed: _showModelSelector,
+                onClearMemoryPressed: () {
+                  LocalLlmService.clearContext();
+                  if (mounted) {
+                    _clearMessages();
+                    setState(() {
+                      _currentSessionId = null;
+                      _needsSaving = false;
+                    });
+                  }
+                  LocalLlmService.activeSessionSummary = '';
+                  _refreshHistory();
+                },
+                onExitPressed: () {
+                  if (mounted) {
+                    _handleExit();
+                  }
+                },
+                onLongPressPill: () {
+                  showModalBottomSheet(
+                    context: context,
+                    backgroundColor: Colors.transparent,
+                    isScrollControlled: true,
+                    shape: const RoundedRectangleBorder(
+                      borderRadius: BorderRadius.vertical(
+                        top: Radius.circular(24),
+                      ),
+                    ),
+                    builder: (_) => const DevGeofenceModal(),
+                  );
+                },
               ),
               // 🗣️ ÁREA DE CHAT
               // ── Holy Grail Layout Pattern ───────────────────────────────────
@@ -2319,50 +1507,66 @@ class _MainChatScreenState extends State<MainChatScreen>
               Expanded(
                 child: Stack(
                   children: [
-                    // ── Empty-state placeholder ─────────────────────────────
-                    if (_messages.isEmpty)
-                      Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
+                    // ── Empty-state placeholder and Message list ─────────────────────────────
+                    ValueListenableBuilder<List<ChatMessage>>(
+                      valueListenable: _messagesNotifier,
+                      builder: (context, messagesList, child) {
+                        return Stack(
                           children: [
-                            FaIcon(
-                              FontAwesomeIcons.robot,
-                              size: 48,
-                              color: AppColors.cyberBlue.withAlpha(76),
-                            ),
-                            const SizedBox(height: 16),
-                            Text(
-                              "System Idle. Awaiting input.",
-                              style: Theme.of(context).textTheme.bodyMedium,
+                            if (messagesList.isEmpty)
+                              Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    FaIcon(
+                                      FontAwesomeIcons.robot,
+                                      size: 48,
+                                      color: AppColors.cyberBlue.withAlpha(76),
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      "System Idle. Awaiting input.",
+                                      style: Theme.of(
+                                        context,
+                                      ).textTheme.bodyMedium,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            Align(
+                              alignment: Alignment.topCenter,
+                              child: ListView.builder(
+                                controller: _scrollController,
+                                reverse: true,
+                                shrinkWrap: true,
+                                padding: const EdgeInsets.fromLTRB(
+                                  12,
+                                  16,
+                                  12,
+                                  8,
+                                ),
+                                itemCount: messagesList.length,
+                                itemBuilder: (context, index) {
+                                  // PERFORMANCE FIX: Access messages by direct index instead of .reversed.toList()
+                                  final msg =
+                                      messagesList[messagesList.length -
+                                          1 -
+                                          index];
+                                  if (msg.text.isEmpty &&
+                                      !msg.isUser &&
+                                      msg.audioPath == null) {
+                                    return const SizedBox.shrink();
+                                  }
+                                  return ChatBubbleWidget(
+                                    message: msg,
+                                    userBubbleColor: userBubbleColor,
+                                  );
+                                },
+                              ),
                             ),
                           ],
-                        ),
-                      ),
-
-                    // ── Message list ────────────────────────────────────────
-                    Align(
-                      alignment: Alignment.topCenter,
-                      child: ListView.builder(
-                        controller: _scrollController,
-                        reverse: true,
-                        shrinkWrap: true,
-                        padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
-                        itemCount: _messages.length,
-                        itemBuilder: (context, index) {
-                          // Invert the index so that the most recent message
-                          // (last in the list) maps to index 0 of the reversed
-                          // render order, keeping chronological top-to-bottom
-                          // visual order while anchoring physics at the bottom.
-                          final reversedMessages = _messages.reversed.toList();
-                          final msg = reversedMessages[index];
-                          if (msg.text.isEmpty &&
-                              !msg.isUser &&
-                              msg.audioPath == null) {
-                            return const SizedBox.shrink();
-                          }
-                          return _buildChatBubble(msg, userBubbleColor);
-                        },
-                      ),
+                        );
+                      },
                     ),
 
                     // 🌀 ANIMACIÓN DE PENSANDO (SpinKit)
@@ -2462,745 +1666,43 @@ class _MainChatScreenState extends State<MainChatScreen>
                       ),
 
                     // ── Floating pill input row ─────────────────────────────
-                    Container(
-                      decoration: BoxDecoration(
-                        color: AppColors.deepIndigo,
-                        borderRadius: BorderRadius.circular(36),
-                        border: Border.all(
-                          color: AppColors.glassBorder,
-                          width: 1.0,
-                        ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.black.withAlpha(70),
-                            blurRadius: 16,
-                            offset: const Offset(0, 6),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        children: [
-                          // ── Left actions: visible only when NOT recording ──
-                          AnimatedSwitcher(
-                            duration: const Duration(milliseconds: 250),
-                            child: _isRecording
-                                ? const SizedBox(
-                                    width: 12,
-                                    key: ValueKey('pad'),
-                                  )
-                                : Padding(
-                                    key: const ValueKey('actions'),
-                                    padding: const EdgeInsets.only(
-                                      left: 6.0,
-                                      top: 6.0,
-                                      bottom: 6.0,
-                                    ),
-                                    child: Container(
-                                      height: 44,
-                                      width: 44,
-                                      decoration: BoxDecoration(
-                                        // Le damos el mismo fondo circular que al micrófono
-                                        color: AppColors.cyberBlue.withAlpha(
-                                          40,
-                                        ),
-                                        shape: BoxShape.circle,
-                                      ),
-                                      child: IconButton(
-                                        icon: const Icon(
-                                          Icons.attach_file_rounded,
-                                          color: AppColors.cyberBlue,
-                                          size: 22,
-                                        ),
-                                        onPressed: _isLoading
-                                            ? null
-                                            : _showAttachmentOptions,
-                                        tooltip: 'Attach',
-                                      ),
-                                    ),
-                                  ),
-                          ),
-
-                          // ── Center: TextField OR Waveform ──────────────────
-                          Expanded(
-                            child: AnimatedSwitcher(
-                              duration: const Duration(milliseconds: 300),
-                              child: _isRecording
-                                  ? const Padding(
-                                      key: ValueKey('wave'),
-                                      padding: EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 14,
-                                      ),
-                                      child: _WaveformWidget(),
-                                    )
-                                  : TextField(
-                                      key: const ValueKey('textfield'),
-                                      controller: _textController,
-                                      focusNode: _focusNode,
-                                      maxLines: 5,
-                                      minLines: 1,
-                                      textCapitalization:
-                                          TextCapitalization.sentences,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontFamily: 'Outfit',
-                                        fontSize: 15,
-                                      ),
-                                      cursorColor: AppColors.cyberBlue,
-                                      onTapOutside: (PointerDownEvent event) =>
-                                          FocusManager.instance.primaryFocus
-                                              ?.unfocus(),
-                                      decoration: const InputDecoration(
-                                        hintText: 'Message Aitana...',
-                                        hintStyle: TextStyle(
-                                          color: Colors.white30,
-                                          fontFamily: 'Outfit',
-                                        ),
-                                        // LA MAGIA: Forzamos fondo transparente y matamos bordes
-                                        filled: true,
-                                        fillColor: Colors.transparent,
-                                        border: InputBorder.none,
-                                        enabledBorder: InputBorder.none,
-                                        focusedBorder: InputBorder.none,
-                                        errorBorder: InputBorder.none,
-                                        disabledBorder: InputBorder.none,
-                                        isDense: true,
-                                        contentPadding: EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 12,
-                                        ),
-                                      ),
-                                    ),
-                            ),
-                          ),
-
-                          // ── Right: dynamic action button ───────────────────
-                          // ValueListenableBuilder scopes rebuilds to ONLY
-                          // this button. The TextField's RenderEditable is
-                          // never re-mounted when the user types, eliminating
-                          // the mid-gesture rebuild that caused the
-                          // tap-to-position → drag-selection bug.
-                          ValueListenableBuilder<bool>(
-                            valueListenable: _isTypingNotifier,
-                            builder: (context, isTyping, _) {
-                              return Padding(
-                                padding: const EdgeInsets.all(6),
-                                child: AnimatedContainer(
-                                  duration: const Duration(milliseconds: 200),
-                                  height: 44,
-                                  width: 44,
-                                  decoration: BoxDecoration(
-                                    color: _isLoading
-                                        ? Colors.grey[800]
-                                        : _isRecording
-                                        ? Colors.redAccent.withAlpha(30)
-                                        : AppColors.cyberBlue.withAlpha(40),
-                                    shape: BoxShape.circle,
-                                    border: _isRecording
-                                        ? Border.all(
-                                            color: Colors.redAccent.withAlpha(
-                                              160,
-                                            ),
-                                            width: 1.5,
-                                          )
-                                        : null,
-                                  ),
-                                  child: AnimatedSwitcher(
-                                    duration: const Duration(milliseconds: 200),
-                                    transitionBuilder: (child, animation) =>
-                                        ScaleTransition(
-                                          scale: animation,
-                                          child: child,
-                                        ),
-                                    child: _isLoading
-                                        ? const IconButton(
-                                            key: ValueKey('stop'),
-                                            icon: Icon(
-                                              Icons.stop_rounded,
-                                              color: Colors.white,
-                                              size: 20,
-                                            ),
-                                            onPressed: null,
-                                          )
-                                        : (isTyping ||
-                                              _selectedImagePath != null)
-                                        ? IconButton(
-                                            key: const ValueKey('send'),
-                                            icon: const Icon(
-                                              Icons.send_rounded,
-                                              color: Colors.white,
-                                              size: 20,
-                                            ),
-                                            onPressed: _sendMessage,
-                                          )
-                                        : IconButton(
-                                            key: const ValueKey('mic'),
-                                            icon: Icon(
-                                              _isRecording
-                                                  ? Icons.stop_rounded
-                                                  : Icons.mic_none_rounded,
-                                              color: _isRecording
-                                                  ? Colors.redAccent
-                                                  : AppColors.cyberBlue,
-                                              size: 22,
-                                            ),
-                                            onPressed: _toggleRecording,
-                                          ),
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      ),
+                    VoiceInputPanel(
+                      textController: _textController,
+                      focusNode: _focusNode,
+                      isLoading: _isLoading,
+                      selectedImagePath: _selectedImagePath,
+                      isTypingNotifier: _isTypingNotifier,
+                      onAttachmentPressed: _showAttachmentOptions,
+                      onSendText: _sendMessage,
+                      onAudioRecorded: _handleAudioRecorded,
                     ),
                   ],
                 ),
               ),
             ],
-          ), // Column
-        ), // Scaffold
-        // ── THE ARMOR ── RAM-lock overlay (Ghost Summary / model init) ─────────
-        // Sits at the TOP of the Stack so it covers everything, including the
-        // Drawer, FABs, and the keyboard. The ModalBarrier absorbs all pointer
-        // events so the user cannot dispatch new messages while the C++ engine
-        // is saturating all CPU cores and RAM is critically constrained.
+          ),
+        ),
+        // 🛡️ THE ARMOR (OOM BLOCKER)
         ValueListenableBuilder<bool>(
           valueListenable: LocalLlmService.isEngineBusy,
-          builder: (context, isBusy, _) {
+          builder: (context, isBusy, child) {
             if (!isBusy) return const SizedBox.shrink();
             return const SystemLockOverlay(
-              title: 'Synthesizing memory...',
-              subtitle: 'Protecting system memory...',
+              title: "Neural Core Engine Busy",
+              subtitle: "Reconfiguring memory for high-performance inference...",
             );
           },
         ),
-      ], // Stack children
-    ); // Stack
-  }
-
-  // 💬 CONSTRUCTOR DE BURBUJAS
-  Widget _buildChatBubble(ChatMessage message, Color userBubbleColor) {
-    // ─── CASO ESPECIAL: BURBUJA ORÁCULO (Resumen del Historial) ───
-    if (message.isSystemOracle) {
-      return Align(
-        alignment: Alignment.center, // Centrado total
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 16),
-          padding: const EdgeInsets.all(16),
-          width: MediaQuery.of(context).size.width * 0.85, // Más ancha
-          decoration: BoxDecoration(
-            color: AppColors.deepIndigo.withAlpha(
-              150,
-            ), // Fondo cristalino oscuro
-            borderRadius: BorderRadius.circular(16), // Completamente redondeada
-            border: Border.all(
-              color: const Color(
-                0xFFD4AF37,
-              ).withAlpha(100), // Borde dorado tenue
-              width: 1.0,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withAlpha(40),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: Column(
-            children: [
-              // El icono de la cápsula del tiempo / ojo
-              const Icon(
-                Icons.history_edu_rounded,
-                color: Color(0xFFD4AF37), // Dorado
-                size: 28,
-              ),
-              const SizedBox(height: 8),
-              Text(
-                message.text,
-                textAlign: TextAlign.center, // Texto centrado
-                style: const TextStyle(
-                  color: Colors
-                      .white70, // Texto un poco más tenue que los mensajes normales
-                  fontSize: 14,
-                  fontFamily: 'Outfit',
-                  height: 1.5,
-                  fontStyle: FontStyle.italic, // Cursiva para denotar memoria
-                ),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    // ─── CASO NORMAL: MENSAJES DE LORENZO O AITANA ───
-    return Align(
-      alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: Row(
-        mainAxisAlignment: message.isUser
-            ? MainAxisAlignment.end
-            : MainAxisAlignment.start,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: [
-          if (!message.isUser) ...[
-            CircleAvatar(
-              radius: 12,
-              backgroundColor: AppColors.cyberBlue.withAlpha(50),
-              child: const Text(
-                'A',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMedium,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-            const SizedBox(width: 8),
-          ],
-          Flexible(
-            child: Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-              constraints: BoxConstraints(
-                maxWidth: MediaQuery.of(context).size.width * 0.75,
-              ),
-              decoration: BoxDecoration(
-                color: message.isUser ? userBubbleColor : AppColors.deepIndigo,
-                borderRadius: BorderRadius.only(
-                  topLeft: const Radius.circular(18),
-                  topRight: const Radius.circular(18),
-                  bottomLeft: Radius.circular(message.isUser ? 18 : 4),
-                  bottomRight: Radius.circular(message.isUser ? 4 : 18),
-                ),
-                border: message.isUser
-                    ? null
-                    : Border.all(color: AppColors.glassBorder, width: 0.5),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withAlpha(25),
-                    blurRadius: 3,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Column(
-                crossAxisAlignment: message.isUser
-                    ? CrossAxisAlignment.end
-                    : CrossAxisAlignment.start,
-                children: [
-                  if (message.imagePath != null) ...[
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(12),
-                      child: Image.file(
-                        File(message.imagePath!),
-                        width: double.infinity,
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    if (message.text.isNotEmpty || message.audioPath != null)
-                      const SizedBox(height: 8),
-                  ],
-                  if (message.audioPath != null) ...[
-                    AudioBubble(
-                      audioPath: message.audioPath!,
-                      durationText: message.audioDuration ?? '0.0s',
-                      isUser: message.isUser,
-                    ),
-                    if (message.text.isNotEmpty) const SizedBox(height: 8),
-                  ],
-                  if (message.text.isNotEmpty)
-                    Text(
-                      message.text,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 15,
-                        fontFamily: 'Outfit',
-                        height: 1.4,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
+      ],
     );
   }
 }
 
-void _showParameterInfo(
-  BuildContext context,
-  String title,
-  String message, {
-  String? actionLabel,
-  VoidCallback? onAction,
-}) {
-  showModalBottomSheet(
-    context: context,
-    backgroundColor: AppColors.deepIndigo,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-    ),
-    builder: (context) {
-      return SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontFamily: 'Outfit',
-                  fontSize: 20,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 16),
-              Text(
-                message,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontFamily: 'Outfit',
-                  fontSize: 16,
-                  height: 1.5,
-                ),
-              ),
-              if (actionLabel != null && onAction != null) ...[
-                const SizedBox(height: 24),
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.deepOrangeAccent,
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 16),
-                    ),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      onAction();
-                    },
-                    child: Text(
-                      actionLabel,
-                      style: const TextStyle(
-                        fontFamily: 'Outfit',
-                        fontWeight: FontWeight.bold,
-                        fontSize: 16,
-                        letterSpacing: 1.2,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-              const SizedBox(height: 8),
-            ],
-          ),
-        ),
-      );
-    },
-  );
-}
-
-// 📦 WIDGET PERSONALIZADO PARA LOS SLIDERS Y CAJAS DE TEXTO (El Reto)
-class _ParameterSlider extends StatefulWidget {
-  final String label;
-  final String tooltipMessage;
-  final double min;
-  final double max;
-  final double value;
-  final bool isDouble;
-  final ValueChanged<double> onChanged;
-
-  const _ParameterSlider({
-    required this.label,
-    required this.tooltipMessage,
-    required this.min,
-    required this.max,
-    required this.value,
-    required this.isDouble,
-    required this.onChanged,
-  });
-
-  @override
-  State<_ParameterSlider> createState() => _ParameterSliderState();
-}
-
-class _ParameterSliderState extends State<_ParameterSlider> {
-  late TextEditingController _inputCtrl;
-  late double _currentValue;
-
-  @override
-  void initState() {
-    super.initState();
-    _currentValue = widget.value;
-    _inputCtrl = TextEditingController(text: _formatValue(_currentValue));
-  }
-
-  @override
-  void dispose() {
-    _inputCtrl.dispose();
-    super.dispose();
-  }
-
-  /// Reacts to parent-driven value changes (e.g. the "Reset" button calling
-  /// [setDialogState] with new defaults). Without this, [_currentValue] and
-  /// [_inputCtrl] would only ever reflect the value passed at construction time.
-  @override
-  void didUpdateWidget(covariant _ParameterSlider oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.value != widget.value) {
-      setState(() {
-        _currentValue = widget.value;
-        _inputCtrl.text = _formatValue(_currentValue);
-      });
-    }
-  }
-
-  String _formatValue(double val) {
-    return widget.isDouble ? val.toStringAsFixed(2) : val.toInt().toString();
-  }
-
-  void _updateFromText(String text) {
-    double? parsed = double.tryParse(text);
-    if (parsed != null) {
-      if (parsed < widget.min) parsed = widget.min;
-      if (parsed > widget.max) parsed = widget.max;
-      setState(() {
-        _currentValue = parsed!;
-        _inputCtrl.text = _formatValue(_currentValue);
-      });
-      widget.onChanged(_currentValue);
-    } else {
-      _inputCtrl.text = _formatValue(
-        _currentValue,
-      ); // Revertir si escriben basura
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 8.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Text(
-                widget.label,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontFamily: 'Outfit',
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(width: 8),
-              GestureDetector(
-                onTap: () => _showParameterInfo(
-                  context,
-                  widget.label,
-                  widget.tooltipMessage,
-                ),
-                behavior: HitTestBehavior.opaque,
-                child: const Padding(
-                  padding: EdgeInsets.all(8.0),
-                  child: Icon(Icons.info_outline, size: 16, color: Colors.grey),
-                ),
-              ),
-            ],
-          ),
-          Row(
-            children: [
-              Expanded(
-                child: SliderTheme(
-                  data: SliderTheme.of(context).copyWith(
-                    activeTrackColor: AppColors.cyberBlue,
-                    inactiveTrackColor: Colors.white12,
-                    thumbColor: Colors.white,
-                    overlayColor: AppColors.cyberBlue.withAlpha(50),
-                    trackHeight: 4.0,
-                  ),
-                  child: Slider(
-                    value: _currentValue,
-                    min: widget.min,
-                    max: widget.max,
-                    divisions: widget.isDouble
-                        ? 100
-                        : (widget.max - widget.min).toInt(),
-                    onChanged: (val) {
-                      setState(() {
-                        _currentValue = val;
-                        _inputCtrl.text = _formatValue(val);
-                      });
-                      widget.onChanged(val);
-                    },
-                  ),
-                ),
-              ),
-              SizedBox(
-                width: 60,
-                child: TextField(
-                  controller: _inputCtrl,
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
-                  ),
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontFamily: 'Outfit',
-                    fontSize: 14,
-                  ),
-                  decoration: InputDecoration(
-                    isDense: true,
-                    contentPadding: const EdgeInsets.symmetric(
-                      vertical: 8,
-                      horizontal: 4,
-                    ),
-                    filled: true,
-                    fillColor: Colors.white.withAlpha(15),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  onSubmitted: _updateFromText,
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// 🎙️ ANIMATED WAVEFORM WIDGET (shown during voice recording)
-class _WaveformWidget extends StatefulWidget {
-  const _WaveformWidget();
-
-  @override
-  State<_WaveformWidget> createState() => _WaveformWidgetState();
-}
-
-class _WaveformWidgetState extends State<_WaveformWidget>
-    with TickerProviderStateMixin {
-  static const int _barCount = 5;
-  late final List<AnimationController> _controllers;
-  late final List<Animation<double>> _animations;
-
-  // Staggered delays (ms) so each bar pulses at a different phase
-  static const List<int> _delays = [0, 120, 60, 180, 30];
-  // Unique speed multipliers for organic feel
-  static const List<int> _durations = [420, 360, 500, 380, 450];
-
-  @override
-  void initState() {
-    super.initState();
-    _controllers = List.generate(_barCount, (i) {
-      return AnimationController(
-        vsync: this,
-        duration: Duration(milliseconds: _durations[i]),
-      );
-    });
-
-    _animations = List.generate(_barCount, (i) {
-      return Tween<double>(begin: 0.15, end: 1.0).animate(
-        CurvedAnimation(parent: _controllers[i], curve: Curves.easeInOut),
-      );
-    });
-
-    // Start each bar with its own delay for a stagger effect
-    for (int i = 0; i < _barCount; i++) {
-      Future.delayed(Duration(milliseconds: _delays[i]), () {
-        if (mounted) {
-          _controllers[i].repeat(reverse: true);
-        }
-      });
-    }
-  }
-
-  @override
-  void dispose() {
-    for (final c in _controllers) {
-      c.dispose();
-    }
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: List.generate(_barCount, (i) {
-        return AnimatedBuilder(
-          animation: _animations[i],
-          builder: (context, child) {
-            final height = 6.0 + (_animations[i].value * 22.0);
-            return Container(
-              width: 4,
-              height: height,
-              margin: const EdgeInsets.symmetric(horizontal: 3),
-              decoration: BoxDecoration(
-                color: AppColors.cyberBlue.withAlpha(200),
-                borderRadius: BorderRadius.circular(4),
-              ),
-            );
-          },
-        );
-      }),
-    );
-  }
-}
-
-// 📦 MODELO DE DATOS
-class ChatMessage {
-  String text;
-  final bool isUser;
-  final String? imagePath;
-  final String? audioPath;
-  final String? audioDuration;
-  final bool isSystemOracle;
-
-  ChatMessage({
-    required this.text,
-    required this.isUser,
-    this.imagePath,
-    this.audioPath,
-    this.audioDuration,
-    this.isSystemOracle = false,
-  });
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// RENAME DIALOG WIDGET
-// ─────────────────────────────────────────────────────────────────────────────
-
-/// A self-contained rename dialog whose [TextEditingController] is bound to
-/// the widget's own [State] lifecycle.
-///
-/// **Why a [StatefulWidget] instead of an inline builder?**
-/// When `showDialog` resolves (i.e., after `Navigator.pop`), the builder
-/// closure is immediately eligible for garbage collection, but Flutter may
-/// still be running the dialog's *closing animation*. Any `TextEditingController`
-/// that is disposed in a `finally` block at the call site will be accessed by
-/// the [TextField] during that animation, producing a fatal
-/// `"used after being disposed"` assertion. Binding the controller to
-/// `initState` / `dispose` ensures it lives exactly as long as the widget
-/// subtree, which is the correct Flutter contract.
+/// A simple dialog for renaming a chat session.
 class _RenameSessionDialog extends StatefulWidget {
-  const _RenameSessionDialog({required this.initialTitle});
-
-  /// The pre-filled value shown in the [TextField] when the dialog opens.
   final String initialTitle;
+
+  const _RenameSessionDialog({required this.initialTitle});
 
   @override
   State<_RenameSessionDialog> createState() => _RenameSessionDialogState();
@@ -3209,14 +1711,9 @@ class _RenameSessionDialog extends StatefulWidget {
 class _RenameSessionDialogState extends State<_RenameSessionDialog> {
   late final TextEditingController _controller;
 
-  /// Guards against double-taps on the "Save" button.
-  bool _isProcessing = false;
-
   @override
   void initState() {
     super.initState();
-    // Controller is created once and lives until this State is disposed —
-    // safely after the closing animation finishes.
     _controller = TextEditingController(text: widget.initialTitle);
   }
 
@@ -3224,24 +1721,6 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
   void dispose() {
     _controller.dispose();
     super.dispose();
-  }
-
-  void _handleSave() {
-    if (_isProcessing) return;
-
-    final newTitle = _controller.text.trim();
-    if (newTitle.isEmpty) return;
-
-    setState(() => _isProcessing = true);
-
-    // Return the validated title to the caller via Navigator.
-    // The caller (_renameSession) handles the ObjectBox write.
-    Navigator.pop(context, newTitle);
-  }
-
-  void _handleCancel() {
-    if (_isProcessing) return;
-    Navigator.pop(context, null);
   }
 
   @override
@@ -3264,26 +1743,23 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
         controller: _controller,
         autofocus: true,
         style: const TextStyle(color: Colors.white, fontFamily: 'Outfit'),
-        cursorColor: AppColors.cyberBlue,
-        // Allow "Done" / "Go" on the software keyboard to trigger Save.
-        textInputAction: TextInputAction.done,
-        onSubmitted: (_) => _handleSave(),
         decoration: InputDecoration(
-          enabledBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: AppColors.glassBorder),
+          hintText: 'Enter new title...',
+          hintStyle: const TextStyle(color: Colors.white30),
+          enabledBorder: UnderlineInputBorder(
+            borderSide: BorderSide(color: AppColors.cyberBlue.withAlpha(100)),
           ),
-          focusedBorder: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(10),
-            borderSide: const BorderSide(color: AppColors.cyberBlue),
+          focusedBorder: const UnderlineInputBorder(
+            borderSide: BorderSide(color: AppColors.cyberBlue),
           ),
-          filled: true,
-          fillColor: Colors.white.withAlpha(10),
         ),
+        onSubmitted: (val) {
+          if (val.trim().isNotEmpty) Navigator.pop(context, val.trim());
+        },
       ),
       actions: [
         TextButton(
-          onPressed: _handleCancel,
+          onPressed: () => Navigator.pop(context),
           child: const Text(
             'Cancel',
             style: TextStyle(color: Colors.white54, fontFamily: 'Outfit'),
@@ -3292,12 +1768,15 @@ class _RenameSessionDialogState extends State<_RenameSessionDialog> {
         ElevatedButton(
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.cyberBlue,
-            foregroundColor: AppColors.obsidian,
+            foregroundColor: Colors.white,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(12),
             ),
           ),
-          onPressed: _isProcessing ? null : _handleSave,
+          onPressed: () {
+            final text = _controller.text.trim();
+            if (text.isNotEmpty) Navigator.pop(context, text);
+          },
           child: const Text(
             'Save',
             style: TextStyle(fontWeight: FontWeight.bold, fontFamily: 'Outfit'),

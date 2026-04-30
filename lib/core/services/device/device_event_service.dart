@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:aitana/core/constants/native_channels.dart';
 
 /// Subscribes to the native `DEVICE_EVENTS` EventChannel and exposes
 /// the real hardware recording state as a [ValueNotifier].
@@ -14,7 +15,7 @@ import 'package:flutter/services.dart';
 /// the Flutter UI never needs to maintain optimistic state.
 class DeviceEventService {
   static const EventChannel _eventChannel = EventChannel(
-    'com.lmartinez.aitana/device_events',
+    NativeChannels.deviceEvents,
   );
 
   /// `true` while the CameraX engine has confirmed an active recording

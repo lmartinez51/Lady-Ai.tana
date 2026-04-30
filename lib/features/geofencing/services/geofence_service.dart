@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/geofencing/repositories/geofence_repository.dart';
 import 'package:aitana/features/geofencing/services/offline_location_registry.dart';
@@ -15,7 +16,7 @@ class GeofenceService {
   }
 
   static const MethodChannel _channel = MethodChannel(
-    'com.lmartinez.aitana/geofence',
+    NativeChannels.geofence,
   );
 
   /// Convenience accessor — safe because ObjectBoxService.create() always runs in main() first.

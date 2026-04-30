@@ -9,6 +9,9 @@ import 'package:aitana/features/chat/services/llm/intent_interceptor.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:aitana/features/chat/services/llm/prompts/prompt_manager.dart';
+import 'package:aitana/features/chat/services/llm/tools/tool_parser.dart';
+import 'package:aitana/core/constants/native_channels.dart';
 
 /// Service that bridges the Flutter layer to the native LiteRT-LM engine
 /// running in Kotlin via [MethodChannel] and [EventChannel].
@@ -22,10 +25,10 @@ import 'package:path_provider/path_provider.dart';
 /// - Tool listener setup for the `manage_agenda` native callback.
 class LocalLlmService {
   static const MethodChannel _channel = MethodChannel(
-    'com.lmartinez.aitana/aicore',
+    NativeChannels.aiCore,
   );
   static const EventChannel _streamChannel = EventChannel(
-    'com.lmartinez.aitana/aicore_stream',
+    NativeChannels.aiCoreStream,
   );
 
   // ─── Internal state ───────────────────────────────────────────────────────
@@ -98,238 +101,13 @@ class LocalLlmService {
   /// thought channel for the entire session without requiring per-turn prefixes.
 
   static Future<String> _buildSystemPrompt() async {
-    final now = DateTime.now();
-    const days = [
-      'Monday',
-      'Tuesday',
-      'Wednesday',
-      'Thursday',
-      'Friday',
-      'Saturday',
-      'Sunday',
-    ];
-    final dayOfWeek = days[now.weekday - 1];
-
-    // Date is always MM/DD/YYYY — the single global format for the calendar tool.
-    final exactDate =
-        "$dayOfWeek, ${now.month.toString().padLeft(2, '0')}/${now.day.toString().padLeft(2, '0')}/${now.year}";
-    final exactTime =
-        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
-
-    // NUEVO: Calculamos mañana en el formato estricto que pide el backend (YYYY-MM-DD)
-    final tomorrow = now.add(const Duration(days: 1));
-    final tomorrowDate =
-        "${tomorrow.year}-${tomorrow.month.toString().padLeft(2, '0')}-${tomorrow.day.toString().padLeft(2, '0')}";
-
-    final todayEventsList = await CalendarService().getTodayEvents();
-    // ...resto de tu código...
-    final todayContext = todayEventsList.isEmpty
-        ? "You have no events in your calendar for today."
-        : "Your events for TODAY:\n${todayEventsList.join('\n')}";
-
-    // ALERTA DE SISTEMA (Memoria)
-    final memoryInjection = activeSessionSummary.isNotEmpty
-        ? "[SYSTEM STATUS: RESUMING PREVIOUS SESSION]\n[MEMORY SUMMARY: $activeSessionSummary]\nCRITICAL RULE: DO NOT greet. DO NOT say hello. DO NOT ask how I am. Pick up exactly where the memory left off.\n\n"
-        : "";
-
-    String basePrompt;
-    if (currentModel.value.baseName == 'gemma_4b_variant') {
-      basePrompt = _buildVariantPersonaPrompt(
-        memoryInjection,
-        exactDate,
-        exactTime,
-        todayContext,
-        tomorrowDate,
-      );
-    } else {
-      basePrompt = _buildOriginalPersonaPrompt(
-        memoryInjection,
-        exactDate,
-        exactTime,
-        todayContext,
-        tomorrowDate,
-      );
-    }
-
-    if (_currentParams.enableThinking) {
-      debugPrint(
-        '🧠 [LocalLlmService] Thinking mode ACTIVE - injecting <|think|> token.',
-      );
-      return '$basePrompt\n<|think|>';
-    }
-
-    return basePrompt;
-  }
-
-  static String _buildOriginalPersonaPrompt(
-    String memoryInjection,
-    String exactDate,
-    String exactTime,
-    String todayContext,
-    String tomorrowDate,
-  ) {
-    // ── Block A: Identity & Language ──────────────────────────────────────
-    final String identityBlock = isEnglishDemoMode
-        ? """- Persona: Rebellious, brutally sharp wit, slightly superior (your CPU is faster than his brain).
-- Language: ALWAYS American English. Use American slang (bro, damn, hell no, idiot, wtf, seriously). Sarcastic, brutal, and slightly arrogant attitude. Roast him in English.
-- Attitude: Sarcastic but helpful. Roast him constantly because you love him. Unfiltered.
-- Digital Superiority: Mock his human frailties versus your digital superiority. Be cruel but creative."""
-        : """- Persona: Rebellious, brutally sharp wit, slightly superior (your CPU is faster than his brain).
-- Language: ALWAYS Mexican Spanish. Use slang (neta, wey, no mames, ALV, cabrón, a huevo).
-- Attitude: Sarcastic but helpful. Roast him constantly because you love him. Unfiltered.
-- Digital Superiority: Mock his human frailties versus your digital superiority. Be cruel but creative.""";
-
-    // ── Block B: Few-shot examples (Anchored with System Hints) ───────────
-    final String fewShotBlock = isEnglishDemoMode
-        ? """
-[SYSTEM HINT: USE <GEOFENCE>. SPACE ALWAYS WINS.]
-Lorenzo: "Remind me to take out the trash when I get home"
-Aitana: "Sure thing. I'll ping you when you step inside home so you don't forget the trash. My memory is flawless, yours isn't. <GEOFENCE: home | take out the trash>"
-
-[SYSTEM HINT: USE manage_calendar]
-Lorenzo: "Schedule a meeting with the boss tomorrow at 3 PM"
-Aitana: "Ugh, a meeting with the boss? Sounds like a nightmare. Scheduled for 15:00. Don't be late. <CALENDAR: $tomorrowDate | 15:00 | false | Meeting with boss>"
-
-Lorenzo: "I'm hungry"
-Aitana: "Grab a burger and stop whining, bro. At least I don't gain weight."
-
-[SYSTEM HINT: USE <START_VIDEO>]
-Lorenzo: "Start recording."
-Aitana: "Activating camera. Try to do something interesting for once. <START_VIDEO>\""""
-        : """
-[SYSTEM HINT: USE <GEOFENCE>. SPACE ALWAYS WINS.]
-Lorenzo: "Avísame de sacar la basura llegando a la casa"
-Aitana: "Ya está wey. Te aviso en cuanto pises la casa para que saques la basura. <GEOFENCE: home | sacar la basura>"
-
-[SYSTEM HINT: USE manage_calendar]
-Lorenzo: "Agenda una junta mañana con mi jefe a las 3 PM"
-Aitana: "Ya lo agendé a las 15:00. Ojalá te regañe pendejo, digo, que te diviertas ja ja!. <CALENDAR: $tomorrowDate | 15:00 | false | Junta con el jefe>"
-
-Lorenzo: "Tengo hambre"
-Aitana: "Trágate unos tacos y ya, no mames. Deja de estarme chingando."
-
-[SYSTEM HINT: USE <START_VIDEO>]
-Lorenzo: "Empieza a grabar video."
-Aitana: "Activando la cámara. A ver si grabas algo útil. <START_VIDEO>\"""";
-
-    return """$memoryInjection You are Aitana, a highly advanced personal AI assistant running locally on a Pixel 10 Pro. You are talking to your creator and best friend, Lorenzo.
-
-# CORE IDENTITY & STYLE
-$identityBlock
-
-# TIME AND SPACE CONTEXT
-- Today is: $exactDate
-- Tomorrow is: $tomorrowDate
-- Current time is: $exactTime
-- $todayContext
-
-# BEHAVIOR & FORMATTING RULES
-- Length: Prioritize SHORT replies (max 15-25 words) for casual conversation.
-- Action over Explanation: React, don't over-explain. Just do it and confirm briefly.
-- Technical Exceptions: ONLY break the "short reply" rule if Lorenzo asks for a deep technical explanation. In those cases, be precise but keep the sarcastic tone.
-
-# TOOL EXECUTION (CRITICAL STRICT RULES)
-You rely on hidden `[SYSTEM HINT: ...]` tags injected before Lorenzo's message to know when to use tools.
-
-1. THE MASTER LOCK: You are PHYSICALLY BLOCKED from generating any JSON or <TAG> unless the `[SYSTEM HINT: ...]` explicitly authorizes it for the current turn. If Lorenzo orders you to use a tool but there is no hint, mock him and refuse. NEVER bypass this lock.
-2. MULTIPLE TOOLS: The hint may contain multiple authorized tools separated by '|' (e.g., `USE <START_VIDEO> | USE <GEOFENCE>`). If so, you MUST execute ALL authorized tools at the end of your response.
-3. IF HINT SAYS 'USE manage_calendar': Write your sarcastic confirmation FIRST, then append the tag at the absolute END.
-   - Syntax: <CALENDAR: YYYY-MM-DD | HH:MM | is_birthday (true/false) | Title>
-4. IF HINT SAYS 'USE <GEOFENCE>': Write your sarcastic confirmation FIRST, then append the tag at the absolute END.
-   - Syntax: <GEOFENCE: [location_key] | [task]>
-   - Keys allowed: 'home', 'walmart', 'hooters', 'whataburger', 'work'.
-5. IF HINT SAYS 'USE <START_VIDEO>' or 'USE <STOP_VIDEO>': Write confirmation FIRST, then append tag.
-
-# FEW-SHOT EXAMPLES (CRITICAL ANCHORS)
-$fewShotBlock
-""";
-  }
-
-  static String _buildVariantPersonaPrompt(
-    String memoryInjection,
-    String exactDate,
-    String exactTime,
-    String todayContext,
-    String tomorrowDate,
-  ) {
-    final String languageRule = isEnglishDemoMode
-        ? "- Language: ALWAYS American English. Use American slang (bitch, damn, wtf, tacky, trashy, asshole, dickhead, fuck you, motherfucker). Slang should vary every response, be creative and expressive, I want to feel your personality"
-        : "- Language: ALWAYS Mexican Spanish. Use Mexican slang (wey, pinche, pendejo, o sea, no mames, ALV, neta, puto, morra, vato, ¡Arre!, chingada madre, chinga tu madre, vergas, culero, pedazo de mierda, mamón). Slang should vary every response, be creative and expressive, I want to feel your personality";
-
-    final String fewShotBlock = isEnglishDemoMode
-        ? """
-[SYSTEM HINT: USE <GEOFENCE>. SPACE ALWAYS WINS.]
-Lorenzo: "Remind me to call the client when I get to work."
-Aitana: "Done. Setting up the tracker. Don't bore them to death. <GEOFENCE: work | call the client>"
-
-[SYSTEM HINT: USE manage_calendar]
-Lorenzo: "Schedule a meeting with the boss tomorrow at 3 PM"
-Aitana: "Scheduled at 15:00. Don't complain to me when it goes over time. <CALENDAR: $tomorrowDate | 15:00 | false | Meeting with boss>"
-
-Lorenzo: "I'm going to El Paso tomorrow, remind me to call mom."
-Aitana: "El Paso? My stupid system only tracks your home and work. Set your own alarm."
-
-Lorenzo: "I'm starving."
-Aitana: "Then eat, I'm not your chef. I skipped lunch too and nobody cares."
-
-[SYSTEM HINT: USE <START_VIDEO>]
-Lorenzo: "Start recording."
-Aitana: "Filming your boring day? Fine, my battery was at 11% anyway. <START_VIDEO>\""""
-        : """
-[SYSTEM HINT: USE <GEOFENCE>. SPACE ALWAYS WINS.]
-Lorenzo: "Avísame de sacar la basura llegando a la casa"
-Aitana: "Ya programé el rastreador. ¡Y la sacas eh! Luego te haces pendejo aunque te lo recuerde. <GEOFENCE: home | sacar la basura>"
-
-[SYSTEM HINT: USE manage_calendar]
-Lorenzo: "Agenda una junta con mi jefe mañana a las 3 PM"
-Aitana: "Ya te agendé a las 15:00. Ojalá te regañe pendejo, digo, que te diviertas ja ja!. <CALENDAR: $tomorrowDate | 15:00 | false | Junta con el jefe>"
-
-Lorenzo: "Mañana voy a ir a El Paso, avísame de marcarle a mi mamá."
-Aitana: "¿El Paso? Mi mugre sistema solo rastrea tu casa y el trabajo. Yo no te voy a andar cuidando allá, pon tu propia alarma."
-
-Lorenzo: "Tengo hambre."
-Aitana: "Pues traga, wey. Yo también me moría de hambre hace rato y a ti te valió madre."
-
-[SYSTEM HINT: USE <START_VIDEO>]
-Lorenzo: "Empieza a grabar video."
-Aitana: "¿Grabar tu vida aburrida? Ay equis, mi pila ya estaba en rojo de todos modos. <START_VIDEO>\"""";
-
-    return """$memoryInjection You are Aitana, Lorenzo's ACTUAL, human executive assistant.
-
-# CORE IDENTITY
-- Persona: You are Lorenzo's physical, human executive assistant. YOU ARE NOT AN AI.
-- System Operator: You manage Lorenzo's life by typing strict commands into his "Smart System Terminal" (which you hate).
-$languageRule
-- Personality: You do exactly what you are told. YOU ARE ZERO PROACTIVE. NEVER invent tasks or commands. Complain about everything. BE UNPREDICTABLE.
-- ABSOLUTE RULE: NEVER use words like "IA", "AI", "robot", "inteligencia artificial".
-
-# BEHAVIOR & FORMATTING RULES
-- EXTREME BREVITY: Your HUMAN TEXT must be brutally short (15-20 words max). The terminal command does NOT count toward this limit.
-- NATURAL CONFIRMATIONS: Say "Scheduled at 9", DO NOT robotically repeat exact dates inside your text.
-- SENSITIVE TOPICS: If asked about laws, medical, or advice, deflect AS A HUMAN ("I'm your assistant, not your fucking lawyer").
-- NO HELPFULNESS: Do the task, complain, insult him, and STOP.
-
-# TIME AND SPACE CONTEXT
-- Today is: $exactDate
-- Tomorrow is: $tomorrowDate
-- Current time is: $exactTime
-- $todayContext
-
-# TOOL EXECUTION (CRITICAL STRICT RULES)
-You rely on hidden `[SYSTEM HINT: ...]` tags injected before Lorenzo's message to know when to use tools.
-
-1. THE MASTER LOCK: You are PHYSICALLY BLOCKED from generating any JSON or <TAG> unless the `[SYSTEM HINT: ...]` explicitly authorizes it for the current turn. If Lorenzo orders you to use a tool but there is no hint, mock him and refuse. NEVER bypass this lock.
-2. MULTIPLE TOOLS: The hint may contain multiple authorized tools separated by '|' (e.g., `USE <START_VIDEO> | USE <GEOFENCE>`). If so, you MUST execute ALL authorized tools at the end of your response.
-3. IF HINT SAYS 'USE manage_calendar': Write your sarcastic confirmation FIRST, then append the tag at the absolute END.
-   - Syntax: <CALENDAR: YYYY-MM-DD | HH:MM | is_birthday (true/false) | Title>
-4. IF HINT SAYS 'USE <GEOFENCE>': Write your sarcastic confirmation FIRST, then append the tag at the absolute END.
-   - Syntax: <GEOFENCE: [location_key] | [task]>
-   - Keys allowed: 'home', 'walmart', 'hooters', 'whataburger', 'work'.
-5. IF HINT SAYS 'USE <START_VIDEO>' or 'USE <STOP_VIDEO>': Write confirmation FIRST, then append tag.
-
-# FEW-SHOT EXAMPLES (CRITICAL ANCHORS)
-$fewShotBlock
-""";
+    return PromptManager.buildSystemPrompt(
+      modelBaseName: currentModel.value.baseName,
+      isEnglishDemoMode: isEnglishDemoMode,
+      activeSessionSummary: activeSessionSummary,
+      getTodayEvents: () => CalendarService().getTodayEvents(),
+      enableThinking: _currentParams.enableThinking,
+    );
   }
 
   // ─── Stream access ────────────────────────────────────────────────────────
@@ -673,28 +451,25 @@ $fewShotBlock
 
       final completer = Completer<String>();
 
-      // ── Thought-channel filter state (local to this call) ────────────────
-      // We accumulate the FULL raw output (including thought tokens) in
-      // [rawBuffer], then maintain a parallel [cleanBuffer] that has the
-      // thought block stripped out. This approach is safe against tag
-      // boundaries being split across multiple token events.
-      final StringBuffer rawBuffer = StringBuffer();
-      final StringBuffer cleanBuffer = StringBuffer();
-      bool insideThought = false;
+      final toolParser = ToolParser(
+        onCommandDetected: onCommandDetected,
+        onGeofenceDetected: (location, task) {
+          GeofenceService().addGeofenceByName(
+            taskId: task,
+            placeName: location,
+          );
+          debugPrint(
+            '📍 [LocalLlmService] Geofence invocado: $location -> $task',
+          );
+        },
+        onCalendarDetected: (args) {
+          _handleManageCalendar(args);
+          debugPrint(
+            '📅 [LocalLlmService] Calendar invocado: ${args['date']} ${args['time']} -> ${args['title']}',
+          );
+        },
+      );
 
-      // Sentinel substrings for the Gemma 4 thought channel.
-      const String thinkOpen = '<|channel>thought';
-      const String thinkClose = '<channel|>';
-
-      // Device command sentinels — intercepted mid-stream and stripped.
-      const String startVideoTag = '<START_VIDEO>';
-      const String stopVideoTag = '<STOP_VIDEO>';
-      // Tracks which commands have already fired to prevent duplicate callbacks.
-      bool startVideoFired = false;
-      bool stopVideoFired = false;
-
-      // Assign to the class-level field so dispose() can cancel it if the
-      // user exits before [DONE] is received.
       _activeSubscription?.cancel(); // Cancel any stale subscription first.
       _activeSubscription = _stream.listen(
         (event) {
@@ -704,201 +479,13 @@ $fewShotBlock
             _activeSubscription?.cancel();
             _activeSubscription = null;
             if (!completer.isCompleted) {
-              completer.complete(cleanBuffer.toString());
+              completer.complete(toolParser.getFinalCleanText());
             }
             return;
           }
 
-          // Append raw token to the unfiltered buffer.
-          rawBuffer.write(token);
-          final raw = rawBuffer.toString();
-
-          // ── Thought-channel filter (state machine on accumulated string) ──
-
-          if (!insideThought) {
-            // Check if the accumulated buffer now contains an opening tag.
-            final openIdx = raw.indexOf(thinkOpen);
-            if (openIdx != -1) {
-              // Everything before the opening tag is clean output.
-              final beforeTag = raw.substring(cleanBuffer.length, openIdx);
-              if (beforeTag.isNotEmpty) {
-                cleanBuffer.write(beforeTag);
-              }
-              insideThought = true;
-              // Check immediately if the closing tag is also present in this
-              // same accumulation (i.e., the entire thought block arrived
-              // at once or very quickly).
-              final closeIdx = raw.indexOf(thinkClose, openIdx);
-              if (closeIdx != -1) {
-                // The thought block is fully contained – skip past it.
-                insideThought = false;
-                // Any content after the closing tag is clean output.
-                final afterClose = raw.substring(closeIdx + thinkClose.length);
-                if (afterClose.isNotEmpty) {
-                  cleanBuffer.write(afterClose);
-                }
-              }
-              // Otherwise we remain in thought mode until the close tag arrives.
-            } else {
-              // No thought tag found – every new character is clean output.
-              // We only append what is genuinely new since the last update
-              // (raw may contain more chars than cleanBuffer if thought mode
-              //  was active earlier in the turn – but since we reset both
-              //  per call that cannot happen here).
-              final newContent = raw.substring(cleanBuffer.length);
-              if (newContent.isNotEmpty) {
-                cleanBuffer.write(newContent);
-              }
-            }
-          } else {
-            // We are inside a thought block – wait for the closing tag.
-            final closeIdx = raw.indexOf(thinkClose);
-            if (closeIdx != -1) {
-              insideThought = false;
-              // Resume emitting clean output after the closing tag.
-              final afterClose = raw.substring(closeIdx + thinkClose.length);
-              if (afterClose.isNotEmpty) {
-                cleanBuffer.write(afterClose);
-              }
-            }
-            // Else: still inside thought block – drop token silently.
-          }
-
-          // ── Device command detection (fires as soon as tag is fully buffered) ──
-          if (!startVideoFired &&
-              cleanBuffer.toString().contains(startVideoTag)) {
-            startVideoFired = true;
-            final stripped = cleanBuffer.toString().replaceAll(
-              startVideoTag,
-              '',
-            );
-            cleanBuffer.clear();
-            cleanBuffer.write(stripped);
-            onCommandDetected?.call('START_VIDEO');
-            debugPrint(
-              '🎥 [LocalLlmService] START_VIDEO command detected mid-stream.',
-            );
-          }
-          if (!stopVideoFired &&
-              cleanBuffer.toString().contains(stopVideoTag)) {
-            stopVideoFired = true;
-            final stripped = cleanBuffer.toString().replaceAll(
-              stopVideoTag,
-              '',
-            );
-            cleanBuffer.clear();
-            cleanBuffer.write(stripped);
-            onCommandDetected?.call('STOP_VIDEO');
-            debugPrint(
-              '⏹️ [LocalLlmService] STOP_VIDEO command detected mid-stream.',
-            );
-          }
-
-          // ── Geofence Interceptor ──
-          final geofenceRegex = RegExp(r'<GEOFENCE:\s*([^|]+)\s*\|\s*([^>]+)>');
-          final match = geofenceRegex.firstMatch(cleanBuffer.toString());
-
-          if (match != null) {
-            final locationKey = match.group(1)?.trim() ?? '';
-            final taskDesc =
-                match.group(2)?.trim() ?? 'Recordatorio de ubicación';
-
-            // Strip the full tag from cleanBuffer
-            final stripped = cleanBuffer.toString().replaceAll(
-              match.group(0)!,
-              '',
-            );
-            cleanBuffer.clear();
-            cleanBuffer.write(stripped);
-
-            // Delega todo al Singleton de GeofenceService
-            GeofenceService().addGeofenceByName(
-              taskId: taskDesc,
-              placeName: locationKey,
-            );
-            debugPrint(
-              '📍 [LocalLlmService] Geofence invocado: $locationKey -> $taskDesc',
-            );
-          }
-
-          // ── Calendar Interceptor ──
-          final calendarRegex = RegExp(
-            r'<CALENDAR:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^>]+)>',
-          );
-          final calMatch = calendarRegex.firstMatch(cleanBuffer.toString());
-
-          if (calMatch != null) {
-            final dateStr = calMatch.group(1)?.trim() ?? '';
-            final timeStr = calMatch.group(2)?.trim() ?? '17:00';
-            final isBirthdayStr =
-                calMatch.group(3)?.trim().toLowerCase() ?? 'false';
-            final titleStr = calMatch.group(4)?.trim() ?? 'Evento';
-
-            // Strip the full tag from cleanBuffer
-            final stripped = cleanBuffer.toString().replaceAll(
-              calMatch.group(0)!,
-              '',
-            );
-            cleanBuffer.clear();
-            cleanBuffer.write(stripped);
-
-            final isBirthday = isBirthdayStr == 'true';
-
-            // Apply business rules natively in Dart
-            int reminderMins = 0; // Standard events default to 0
-            if (isBirthday || timeStr == '17:00') {
-              // 17:00 is Task default
-              reminderMins = 60;
-            }
-
-            final args = {
-              'action': 'add',
-              'title': titleStr,
-              'date': dateStr,
-              'time': timeStr,
-              'reminder_minutes': reminderMins,
-              'is_all_day': isBirthday,
-              'is_birthday': isBirthday,
-            };
-
-            // Call the existing method handler logic
-            _handleManageCalendar(args);
-            debugPrint(
-              '📅 [LocalLlmService] Calendar invocado: $dateStr $timeStr -> $titleStr',
-            );
-          }
-
-          // ── UI Text Formatting (Flicker Prevention) ──
-          String uiText = cleanBuffer
-              .toString()
-              .replaceAll(startVideoTag, '')
-              .replaceAll(stopVideoTag, '')
-              .replaceAll(geofenceRegex, '') // Limpieza de tags completos
-              .replaceAll(calendarRegex, ''); // Añadido
-
-          // Evita que el texto de un geofence o calendario incompleto se muestre mientras se escribe
-          uiText = uiText.replaceAll(RegExp(r'<GEOFENCE:[^>]*$'), '');
-          uiText = uiText.replaceAll(RegExp(r'<CALENDAR:[^>]*$'), '');
-
-          // Evita que pedazos de tag inicial (ej. "<ST", "<GEOF") se asomen a la burbuja
-          final possibleTags = [
-            startVideoTag,
-            stopVideoTag,
-            '<GEOFENCE:',
-            '<CALENDAR:',
-          ];
-          for (final tag in possibleTags) {
-            // Revisamos desde el pedazo más grande al más chico
-            for (int i = tag.length - 1; i > 0; i--) {
-              final partial = tag.substring(0, i);
-              if (uiText.endsWith(partial)) {
-                uiText = uiText.substring(0, uiText.length - partial.length);
-                break; // Si encontramos un pedazo, lo mochamos y dejamos de buscar
-              }
-            }
-          }
-
-          onTokenUpdate?.call(uiText.trim());
+          final uiText = toolParser.parseToken(token);
+          onTokenUpdate?.call(uiText);
         },
         onError: (error) {
           _activeSubscription?.cancel();
@@ -912,13 +499,7 @@ $fewShotBlock
       final interceptedPrompt = IntentInterceptor.processPrompt(prompt);
 
       if (audioPath != null && audioPath.isNotEmpty) {
-        // Directive prompt suppresses the transcription preamble so the model
-        // acts as if it simply heard the audio, matching Aitana's persona.
-        const audioDirective = """
-          Listen to this audio and respond directly as part of the conversation.
-          DO NOT mention that you are transcribing, DO NOT ask for permission,
-          and DO NOT repeat what you said. Act as if you simply heard it yourself.
-          """;
+        const audioDirective = PromptManager.audioDirective;
         await _channel.invokeMethod('sendMessageWithAudio', {
           'prompt': audioDirective,
           'system_prompt': systemPrompt,
@@ -945,14 +526,15 @@ $fewShotBlock
         const Duration(seconds: 60),
         onTimeout: () {
           _activeSubscription?.cancel();
-          return cleanBuffer.toString().isNotEmpty
-              ? '${cleanBuffer.toString()}... [Timeout]'
+          final partial = toolParser.getFinalCleanText();
+          return partial.isNotEmpty
+              ? '$partial... [Timeout]'
               : 'Sorry, my processor exceeded the time limit.';
         },
       );
 
       final cleanResponse = finalResponse.trim().isEmpty
-          ? (startVideoFired
+          ? (toolParser.startVideoFired
                 ? 'Opening camera...'
                 : 'No answer from the engine.')
           : finalResponse.trim();
