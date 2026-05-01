@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
-import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
 
 /// The floating "pill" header for the main chat interface.
@@ -120,23 +119,6 @@ class ChatHeaderWidget extends StatelessWidget {
                                       );
                                     },
                                   ),
-                                ),
-                                const SizedBox(width: 8),
-                                // 📶 Wi-Fi status icon
-                                ValueListenableBuilder<bool>(
-                                  valueListenable: NetworkService.isOnline,
-                                  builder: (context, isOnline, _) {
-                                    return Tooltip(
-                                      message: isOnline ? 'Online' : 'Offline',
-                                      child: Icon(
-                                        Icons.wifi,
-                                        size: 16,
-                                        color: isOnline
-                                            ? const Color(0xFF00E676)
-                                            : Colors.grey[600],
-                                      ),
-                                    );
-                                  },
                                 ),
                                 // 🔴 Video recording icon (only when active)
                                 if (isRecordingVideo) ...[

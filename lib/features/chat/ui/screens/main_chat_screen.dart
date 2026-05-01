@@ -16,7 +16,7 @@ import 'package:aitana/core/services/device/device_event_service.dart';
 import 'package:aitana/features/chat/ui/dialogs/settings_dialog_widget.dart';
 import 'package:aitana/features/auth/providers/auth_provider.dart';
 import 'package:aitana/features/chat/ui/widgets/exit_sequence_widget.dart';
-import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
+import 'package:aitana/features/dev_tools/ui/dev_tools_bottom_sheet.dart';
 import 'package:aitana/features/chat/domain/entities/chat_message.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_bubble_widget.dart';
 import 'package:aitana/features/chat/ui/widgets/voice_input_panel.dart';
@@ -1481,12 +1481,7 @@ class _MainChatScreenState extends State<MainChatScreen>
                     context: context,
                     backgroundColor: Colors.transparent,
                     isScrollControlled: true,
-                    shape: const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.vertical(
-                        top: Radius.circular(24),
-                      ),
-                    ),
-                    builder: (_) => const DevGeofenceModal(),
+                    builder: (_) => const DevToolsBottomSheet(),
                   );
                 },
               ),
@@ -1689,7 +1684,8 @@ class _MainChatScreenState extends State<MainChatScreen>
             if (!isBusy) return const SizedBox.shrink();
             return const SystemLockOverlay(
               title: "Neural Core Engine Busy",
-              subtitle: "Reconfiguring memory for high-performance inference...",
+              subtitle:
+                  "Reconfiguring memory for high-performance inference...",
             );
           },
         ),

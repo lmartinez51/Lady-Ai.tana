@@ -10,7 +10,9 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Calendar & Task Management**: Parses secure `<CMD_SYS_CAL_EVT>` tags from LLM responses to trigger native Android calendar and alarm APIs via MethodChannels.
 - **Tool Gating & Injection Security**: Implements a "Smart System Terminal Protocol" that prevents unauthorized or hallucinated tool calls by arming the response parser only when specific system hints are present in the context.
 - **Hybrid Geofencing System**: Total synchronization between native Android Geofencing APIs and local ObjectBox persistence. Features a robust two-way handshake, background event processing, idempotency guards, and interactive developer controls.
-- **OOM Blocking Architecture ("The Armor")**: A state-of-the-art UI blocking mechanism that prevents Out of Memory (OOM) crashes by freezing interactions and displaying system lock overlays during high-RAM LLM operations (e.g., model loading, summarization).
+- **OOM Blocking Architecture ("The Armor")**: A state-of-the-art UI blocking mechanism that prevents Out of Memory (OOM) crashes by freezing interactions and displaying system lock overlays during high-RAM LLM operations.
+- **Persistent Foreground Services**: Implements a robust background task lifecycle using `flutter_foreground_task` to maintain surveillance capabilities and system-level monitoring even when the app is in the background.
+- **Hacker-Themed DevTools**: An advanced, actionable developer dashboard accessible via long-press triggers, featuring geofence logs, API inspectors, and a "Kill Switch" for the surveillance engine.
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
 
 ## Tech Stack

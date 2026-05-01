@@ -4,6 +4,7 @@ import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/geofencing/repositories/geofence_repository.dart';
 import 'package:aitana/features/geofencing/services/offline_location_registry.dart';
+import 'package:aitana/core/services/foreground_service_handler.dart';
 
 class GeofenceService {
   // Singleton pattern
@@ -15,9 +16,7 @@ class GeofenceService {
     _channel.setMethodCallHandler(_handleNativeCallback);
   }
 
-  static const MethodChannel _channel = MethodChannel(
-    NativeChannels.geofence,
-  );
+  static const MethodChannel _channel = MethodChannel(NativeChannels.geofence);
 
   /// Convenience accessor — safe because ObjectBoxService.create() always runs in main() first.
   GeofenceRepository get _repo => ObjectBoxService.instance.geofenceRepository;
@@ -26,23 +25,36 @@ class GeofenceService {
   Future<void> init() async {
     await syncGeofenceState();
     _repo.purgeOldRecords(hoursOld: 48);
+
+    // If there are still pending geofences, ensure the foreground service is active
+    if (_repo.getPendingGeofences().isNotEmpty) {
+      debugPrint(
+        '🛡️ [GeofenceService] Active geofences detected. Ensuring foreground service is running.',
+      );
+      await ForegroundServiceControl.startService();
+    }
+
     debugPrint('🧹 [GeofenceService] Auto-sweeper finished...');
   }
 
   /// Synchronizes the geofence state from Kotlin to Dart on startup.
   Future<void> syncGeofenceState() async {
     try {
-      final List<dynamic>? rawIds = await _channel.invokeMethod('getTriggeredGeofences');
+      final List<dynamic>? rawIds = await _channel.invokeMethod(
+        'getTriggeredGeofences',
+      );
       if (rawIds == null || rawIds.isEmpty) return;
 
       final triggeredIds = rawIds.cast<String>();
-      
+
       final pendingRecords = _repo.getPendingGeofences();
-      
+
       for (final record in pendingRecords) {
         if (triggeredIds.contains(record.id.toString())) {
           _repo.markAsTriggered(record.id);
-          debugPrint('🔄 [GeofenceService] Synced record #${record.id} to TRIGGERED from Kotlin state.');
+          debugPrint(
+            '🔄 [GeofenceService] Synced record #${record.id} to TRIGGERED from Kotlin state.',
+          );
         }
       }
     } catch (e) {
@@ -142,6 +154,8 @@ class GeofenceService {
         debugPrint(
           '🎯 [GeofenceService] Geofence successfully added natively: $id',
         );
+        // Ensure persistence layer is active
+        await ForegroundServiceControl.startService();
         return true;
       }
       return false;
@@ -214,15 +228,21 @@ class GeofenceService {
     try {
       // 1. Unregister natively to clean up Android state (Play Services, Snipe maps, etc.)
       await _channel.invokeMethod('removeGeofence', {'id': id.toString()});
-      
+
       // 2. Remove locally from ObjectBox
       _repo.deleteGeofence(id);
-      
-      debugPrint('🗑️ [GeofenceService] Geofence #$id removed natively and locally.');
+
+      debugPrint(
+        '🗑️ [GeofenceService] Geofence #$id removed natively and locally.',
+      );
     } on PlatformException catch (e) {
-      debugPrint('🔴 [GeofenceService] Native Error removing geofence #$id: ${e.message}');
+      debugPrint(
+        '🔴 [GeofenceService] Native Error removing geofence #$id: ${e.message}',
+      );
     } catch (e) {
-      debugPrint('🔴 [GeofenceService] Unexpected Error removing geofence #$id: $e');
+      debugPrint(
+        '🔴 [GeofenceService] Unexpected Error removing geofence #$id: $e',
+      );
     }
   }
 
@@ -230,23 +250,31 @@ class GeofenceService {
   Future<void> clearAllGeofenceRecords() async {
     try {
       final allRecords = _repo.getAllRecords();
-      
+
       // Remove each native registration one by one
       for (final record in allRecords) {
         try {
-          await _channel.invokeMethod('removeGeofence', {'id': record.id.toString()});
+          await _channel.invokeMethod('removeGeofence', {
+            'id': record.id.toString(),
+          });
         } catch (e) {
-          debugPrint('⚠️ [GeofenceService] Native Error removing geofence #${record.id}: $e');
+          debugPrint(
+            '⚠️ [GeofenceService] Native Error removing geofence #${record.id}: $e',
+          );
           // Continue with the loop even if one fails
         }
       }
 
       // Wipe the entire ObjectBox table
       _repo.deleteAllGeofences();
-      
-      debugPrint('🧹 [GeofenceService] All geofences cleared natively and locally.');
+
+      debugPrint(
+        '🧹 [GeofenceService] All geofences cleared natively and locally.',
+      );
     } catch (e) {
-      debugPrint('🔴 [GeofenceService] Unexpected Error clearing all geofences: $e');
+      debugPrint(
+        '🔴 [GeofenceService] Unexpected Error clearing all geofences: $e',
+      );
     }
   }
 }

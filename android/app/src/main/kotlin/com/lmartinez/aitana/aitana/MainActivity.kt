@@ -434,6 +434,13 @@ class MainActivity : FlutterFragmentActivity() {
                     result.success(triggeredIds)
                 }
 
+                "fireSyntheticTrigger" -> {
+                    val id = call.argument<String>("id")
+                        ?: return@setMethodCallHandler result.error("INVALID_ID", "ID is required", null)
+                    GeofenceUtils.fireSyntheticTrigger(this@MainActivity, id)
+                    result.success("success")
+                }
+
                 else -> result.notImplemented()
             }
         }
@@ -654,7 +661,7 @@ class MainActivity : FlutterFragmentActivity() {
             .build()
 
         val geofencingRequest = GeofencingRequest.Builder()
-            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_ENTER or GeofencingRequest.INITIAL_TRIGGER_DWELL)
+            .setInitialTrigger(GeofencingRequest.INITIAL_TRIGGER_DWELL)
             .addGeofence(geofence)
             .build()
 

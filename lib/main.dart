@@ -9,6 +9,7 @@ import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/geofencing/services/geofence_service.dart';
+import 'package:aitana/core/services/foreground_service_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -22,6 +23,9 @@ import 'package:aitana/features/chat/ui/screens/main_chat_screen.dart';
 /// @return `Future<void>`
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Foreground Service Configuration
+  await ForegroundServiceControl.initForegroundTask();
 
   // Disable runtime fetching for offline-first compliance
   GoogleFonts.config.allowRuntimeFetching = false;
