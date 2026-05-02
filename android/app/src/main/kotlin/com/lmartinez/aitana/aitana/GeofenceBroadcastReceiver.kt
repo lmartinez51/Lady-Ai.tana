@@ -159,6 +159,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             message = "¿Ya hiciste esto?: $taskTitle",
                             geofenceId = geofence.requestId
                         )
+                        // Relay the triggered record ID to MainActivity so it can invoke
+                        // the Dart MethodChannel callback (onGeofenceTriggered).
+                        val triggeredIntent = Intent(ACTION_GEOFENCE_TRIGGERED).apply {
+                            setPackage(context.packageName)
+                            putExtra(EXTRA_GEOFENCE_ID, geofence.requestId)
+                        }
+                        context.sendBroadcast(triggeredIntent)
                     } else {
                         Log.d("GeofenceReceiver", "🚫 GEOFENCE DWELL but already triggered (Idempotency Guard). ID: ${geofence.requestId}")
                     }

@@ -26,6 +26,11 @@ class GeofenceService {
     await syncGeofenceState();
     _repo.purgeOldRecords(hoursOld: 48);
 
+    // ── Reboot Survival Logic ────────────────────────────────────────────────
+    // Native geofences (Google Play Services) are lost on device reboots.
+    // We must re-register all PENDING records from ObjectBox into the OS.
+    await _reRegisterPendingGeofences();
+
     // If there are still pending geofences, ensure the foreground service is active
     if (_repo.getPendingGeofences().isNotEmpty) {
       debugPrint(
@@ -35,6 +40,40 @@ class GeofenceService {
     }
 
     debugPrint('🧹 [GeofenceService] Auto-sweeper finished...');
+  }
+
+  /// Restores native monitoring for all geofences that are still PENDING in ObjectBox.
+  Future<void> _reRegisterPendingGeofences() async {
+    final pending = _repo.getPendingGeofences();
+    if (pending.isEmpty) return;
+
+    debugPrint(
+      '🔄 [GeofenceService] Restoring ${pending.length} native geofences from persistence...',
+    );
+
+    for (final record in pending) {
+      // Re-resolve location to get fresh coordinates (or use cached ones if we added them to the record)
+      // For now, we resolve by name again.
+      // Ideally, GeofenceRecord should store lat/lng/radius to avoid registry mismatches.
+      final locationDef = OfflineLocationRegistry.resolveLocation(
+        record.locationKey,
+      );
+
+      if (locationDef != null) {
+        await addGeofence(
+          id: record.id.toString(),
+          title: record.title,
+          lat: locationDef.lat,
+          lng: locationDef.lng,
+          radius: locationDef.radius,
+          targetSsids: locationDef.targetSsids,
+        );
+      } else {
+        debugPrint(
+          '⚠️ [GeofenceService] Could not restore record #${record.id}: Unknown location "${record.locationKey}"',
+        );
+      }
+    }
   }
 
   /// Synchronizes the geofence state from Kotlin to Dart on startup.
@@ -154,8 +193,15 @@ class GeofenceService {
         debugPrint(
           '🎯 [GeofenceService] Geofence successfully added natively: $id',
         );
-        // Ensure persistence layer is active
-        await ForegroundServiceControl.startService();
+
+        // ── Auto-Wake Logic ──────────────────────────────────────────────────
+        // Ensure the Detective (Foreground Service) is awake to monitor SSIDs.
+        if (!ForegroundServiceControl.isServiceRunning.value) {
+          debugPrint(
+            '🟢 [Auto-Wake] New geofence created. Waking up the surveillance service.',
+          );
+          await ForegroundServiceControl.startService();
+        }
         return true;
       }
       return false;
@@ -183,25 +229,27 @@ class GeofenceService {
     required String placeName,
     double radius = 200.0,
   }) async {
-    // ── Step 1: Persist first → obtain authoritative integer ID ─────────────
-    final recordId = _repo.addPendingGeofence(taskId, placeName);
-    debugPrint(
-      '🗄️ [GeofenceService] Created GeofenceRecord #$recordId (PENDING) for "$taskId" @ "$placeName"',
-    );
-
-    // ── Step 2: Resolve coordinates ──────────────────────────────────────────
+    // ── Step 1: Resolve coordinates ──────────────────────────────────────────
     final locationDef = OfflineLocationRegistry.resolveLocation(placeName);
 
     if (locationDef == null) {
-      debugPrint(
-        '⚠️ [GeofenceService] Unknown location: $placeName. Marking record #$recordId as FAILED.',
-      );
-      _repo.markAsFailed(recordId);
+      debugPrint('⚠️ [GeofenceService] Unknown location: $placeName.');
       return false;
     }
 
     debugPrint(
       '🔍 [GeofenceService] Location resolved! $placeName → ${locationDef.lat}, ${locationDef.lng}',
+    );
+
+    // ── Step 2: Persist first → obtain authoritative integer ID ─────────────
+    // We pass the valid SSIDs from the registry to the persistence layer
+    final recordId = _repo.addPendingGeofence(
+      taskId,
+      placeName,
+      validSsids: locationDef.targetSsids,
+    );
+    debugPrint(
+      '🗄️ [GeofenceService] Created GeofenceRecord #$recordId (PENDING) for "$taskId" @ "$placeName"',
     );
 
     // ── Step 3: Send the integer ID to Kotlin as the requestId ──────────────

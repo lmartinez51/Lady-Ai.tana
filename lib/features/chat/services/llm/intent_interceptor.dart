@@ -8,7 +8,7 @@ class IntentInterceptor {
 
   // Hardware Keywords (Flexibilidad para tildes y formas de decirlo)
   static final RegExp _hardwareRegex = RegExp(
-    r'\b(toma video|tomar video|graba|grabar|grabame|grábame|empieza a grabar|pon a grabar|record video)\b',
+    r'\b(toma video|tomar video|graba|grabar|grabame|grábame|empieza a grabar|pon a grabar|record video|camera feed|video interface|turn on the video|take a video|open the camera|video feed|run the camera)\b',
     caseSensitive: false,
     unicode: true,
   );

@@ -193,7 +193,7 @@ class MainActivity : FlutterFragmentActivity() {
             val ssid = wifiInfo?.ssid
 
             ssid?.let { rawSsid ->
-                val cleanSsid = rawSsid.removeSurrounding("\"")
+                val cleanSsid = rawSsid.removeSurrounding("\"").lowercase()
                 val prefs = getSharedPreferences("wifi_sniper_map", Context.MODE_PRIVATE)
                 val geofenceId = prefs.getString(cleanSsid, null)
                 if (geofenceId != null) {
@@ -650,7 +650,7 @@ class MainActivity : FlutterFragmentActivity() {
 
 
     private fun addGeofenceToSystem(id: String, lat: Double, lng: Double, radius: Float, targetSsids: List<String>, result: MethodChannel.Result) {
-        Log.d("GeofenceManager", "🛠️ Creando GeofenceRequest con INITIAL_TRIGGER_ENTER (1)...")
+        Log.d("GeofenceManager", "🛠️ Creando GeofenceRequest con INITIAL_TRIGGER_DWELL...")
         val geofence = Geofence.Builder()
             .setRequestId(id)
             .setCircularRegion(lat, lng, radius)
@@ -690,7 +690,7 @@ class MainActivity : FlutterFragmentActivity() {
         val prefs = context.getSharedPreferences("wifi_sniper_map", Context.MODE_PRIVATE)
         val editor = prefs.edit()
         ssids.forEach { ssid ->
-            editor.putString(ssid, geofenceId) // key=SSID, value=geofenceId
+            editor.putString(ssid.lowercase(), geofenceId) // key=SSID (lowercase), value=geofenceId
         }
         editor.apply()
     }
@@ -1487,21 +1487,37 @@ class MainActivity : FlutterFragmentActivity() {
             engine?.let { return it }
 
             val modelFile = resolveModelFile(baseName)
-            Log.i("LiteRT-LM", "Loading model from: ${modelFile.absolutePath}")
 
-            val engineConfig = EngineConfig(
+            // Intentar GPU primero
+            try {
+                val config = EngineConfig(
+                    modelPath     = modelFile.absolutePath,
+                    backend       = Backend.GPU(),
+                    audioBackend  = Backend.CPU(),
+                    visionBackend = Backend.CPU(),
+                    cacheDir      = cacheDir.path
+                )
+                val eng = Engine(config)
+                eng.initialize()  // ← El crash ocurre aquí si GPU no está disponible
+                Log.i("LiteRT-LM", "Engine listo con GPU ✓")
+                return eng.also { engine = it }
+
+            } catch (e: Exception) {
+                Log.w("LiteRT-LM", "GPU no disponible, usando CPU: ${e.message}")
+            }
+
+            // Fallback garantizado a CPU
+            val config = EngineConfig(
                 modelPath     = modelFile.absolutePath,
-                backend       = Backend.CPU(), // <-- El salvavidas (por ahora)
+                backend       = Backend.CPU(),
                 audioBackend  = Backend.CPU(),
                 visionBackend = Backend.CPU(),
-                cacheDir      = cacheDir.path  // <-- Regresamos a la normalidad
+                cacheDir      = cacheDir.path
             )
-
-            val newEngine = Engine(engineConfig)
-            newEngine.initialize()
-
-            Log.i("LiteRT-LM", "Engine ready ✓")
-            return newEngine.also { engine = it }
+            val eng = Engine(config)
+            eng.initialize()
+            Log.i("LiteRT-LM", "Engine listo con CPU ✓")
+            return eng.also { engine = it }
         }
     }
 

@@ -18,11 +18,16 @@ class GeofenceRepository {
   /// Creates a new [GeofenceRecord] with status "PENDING" and inserts it.
   ///
   /// Returns the ObjectBox-assigned ID of the new record.
-  int addPendingGeofence(String title, String locationKey) {
+  int addPendingGeofence(
+    String title,
+    String locationKey, {
+    List<String> validSsids = const [],
+  }) {
     final record = GeofenceRecord(
       title: title,
       locationKey: locationKey,
       status: 'PENDING',
+      validSsids: validSsids,
       createdAt: DateTime.now(),
     );
     return _box.put(record);
@@ -66,18 +71,27 @@ class GeofenceRepository {
   /// Removes old completed records (TRIGGERED or FAILED) to keep the DB clean.
   void purgeOldRecords({int hoursOld = 48}) {
     final cutoff = DateTime.now().subtract(Duration(hours: hoursOld));
-    
-    final query = _box.query(
-      GeofenceRecord_.status.oneOf(['TRIGGERED', 'FAILED'])
-      .and(GeofenceRecord_.createdAt.lessThan(cutoff.millisecondsSinceEpoch))
-    ).build();
+
+    final query = _box
+        .query(
+          GeofenceRecord_.status
+              .oneOf(['TRIGGERED', 'FAILED'])
+              .and(
+                GeofenceRecord_.createdAt.lessThan(
+                  cutoff.millisecondsSinceEpoch,
+                ),
+              ),
+        )
+        .build();
 
     final idsToRemove = query.findIds();
     if (idsToRemove.isNotEmpty) {
       _box.removeMany(idsToRemove);
-      debugPrint('🗑️ [GeofenceRepository] Purged ${idsToRemove.length} old geofence records.');
+      debugPrint(
+        '🗑️ [GeofenceRepository] Purged ${idsToRemove.length} old geofence records.',
+      );
     }
-    
+
     query.close();
   }
 

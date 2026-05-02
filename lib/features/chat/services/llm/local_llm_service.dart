@@ -38,7 +38,7 @@ class LocalLlmService {
   /// Toggles the AI persona between Mexican Spanish (default) and
   /// Sarcastic American English (YouTube demo mode).
   /// Flip this flag then call [clearContext] to apply immediately.
-  static bool isEnglishDemoMode = false;
+  static bool isEnglishDemoMode = true;
 
   /// In-flight initialization guard.
   ///

@@ -117,45 +117,49 @@ class ForegroundServiceHandler extends TaskHandler {
 
       // Normalize SSID (Android often returns it wrapped in quotes)
       final cleanSsid = ssid.replaceAll('"', '').trim();
+      final lowerSsid = cleanSsid.toLowerCase();
 
-      // 2. Logic: If SSID matches "Thin_Client" (case-insensitive)
-      if (cleanSsid.toLowerCase() == "thin_client") {
-        debugPrint(
-          '🔍 [ForegroundService] Reconciliation: SSID Match! ($cleanSsid)',
+      // 2. Fetch all PENDING geofences
+      final allPending = _box!
+          .query(GeofenceRecord_.status.equals('PENDING'))
+          .build()
+          .find();
+
+      if (allPending.isEmpty) return;
+
+      bool anyTriggered = false;
+
+      for (final record in allPending) {
+        // 3. Logic: Check if current SSID is in the record's validSsids list (case-insensitive)
+        final bool isMatch = record.validSsids.any(
+          (s) => s.toLowerCase() == lowerSsid,
         );
 
-        // 3. Fetch all PENDING geofences targeted for 'work'
-        final pendingWorkGeofences = _box!
-            .query(
-              GeofenceRecord_.status
-                  .equals('PENDING')
-                  .and(GeofenceRecord_.locationKey.equals('work')),
-            )
-            .build()
-            .find();
-
-        if (pendingWorkGeofences.isNotEmpty) {
+        if (isMatch) {
           debugPrint(
-            '🎯 [ForegroundService] Detective found ${pendingWorkGeofences.length} pending work geofences. Triggering...',
+            '🎯 [ForegroundService] Detective matched SSID "$cleanSsid" for record #${record.id} ("${record.title}"). Triggering...',
           );
 
-          for (final record in pendingWorkGeofences) {
-            // 4. Trigger system-level notification via native bridge
-            await _geofenceChannel.invokeMethod('fireSyntheticTrigger', {
-              'id': record.id.toString(),
-            });
+          // 4. Trigger system-level notification via native bridge
+          await _geofenceChannel.invokeMethod('fireSyntheticTrigger', {
+            'id': record.id.toString(),
+          });
 
-            // 5. Mark as TRIGGERED (Completed) in local DB to prevent duplicates
-            record.status =
-                'TRIGGERED'; // We use the existing status to stay consistent
-            record.triggeredAt = DateTime.now();
-            _box!.put(record);
+          // 5. Mark as TRIGGERED (Completed) in local DB to prevent duplicates
+          record.status = 'TRIGGERED';
+          record.triggeredAt = DateTime.now();
+          _box!.put(record);
 
-            debugPrint(
-              '✅ [ForegroundService] Reconciliation Triggered & Marked: ${record.title} (#${record.id})',
-            );
-          }
+          debugPrint(
+            '✅ [ForegroundService] Reconciliation Triggered & Marked: ${record.title} (#${record.id})',
+          );
+          anyTriggered = true;
         }
+      }
+
+      if (!anyTriggered) {
+        // Optional: debug log for silent monitoring
+        // debugPrint('🔍 [ForegroundService] No SSID match found for $cleanSsid across ${allPending.length} records.');
       }
     } catch (e) {
       debugPrint('🔴 [ForegroundService] Reconciliation Error: $e');

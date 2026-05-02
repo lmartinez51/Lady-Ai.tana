@@ -25,16 +25,21 @@ class GeofenceRecord {
   @Property(type: PropertyType.date)
   DateTime createdAt;
 
-  /// Timestamp of when the OS actually fired the location notification.
+  /// Timestamps of when the OS actually fired the location notification.
   /// Null until the geofence transitions to "TRIGGERED".
   @Property(type: PropertyType.date)
   DateTime? triggeredAt;
+
+  /// List of SSIDs that are valid for this geofence's location.
+  /// Used by the ForegroundService reconciliation loop.
+  List<String> validSsids;
 
   GeofenceRecord({
     this.id = 0,
     required this.title,
     required this.locationKey,
     this.status = 'PENDING',
+    this.validSsids = const [],
     DateTime? createdAt,
     this.triggeredAt,
   }) : createdAt = createdAt ?? DateTime.now();

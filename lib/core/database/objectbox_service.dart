@@ -32,7 +32,7 @@ class ObjectBoxService {
   // Constructor privado
   ObjectBoxService._create(this._store) {
     // Vinculamos la caja al iniciar
-    sessionBox         = Box<ChatSession>(_store);
+    sessionBox = Box<ChatSession>(_store);
     geofenceRepository = GeofenceRepository(_store);
   }
 
@@ -50,8 +50,20 @@ class ObjectBoxService {
       await dir.create(recursive: true);
     }
 
-    // Abrimos el Store real
-    final store = await openStore(directory: dbPath);
+    // Abrimos el Store real (con fallback de attach para evitar OBX_ERROR 10001)
+    late final Store store;
+    try {
+      store = await openStore(directory: dbPath);
+    } catch (e) {
+      if (e.toString().contains('10001')) {
+        debugPrint(
+          '⚠️ [ObjectBox] Store already open (likely by Foreground Service). Attaching...',
+        );
+        store = Store.attach(getObjectBoxModel(), dbPath);
+      } else {
+        rethrow;
+      }
+    }
 
     _instance = ObjectBoxService._create(store);
   }

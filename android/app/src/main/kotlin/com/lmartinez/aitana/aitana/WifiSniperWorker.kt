@@ -26,7 +26,7 @@ class WifiSniperWorker(context: Context, params: WorkerParameters) : Worker(cont
         if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return ListenableWorker.Result.success()
         
         val wifiInfo = caps.transportInfo as? WifiInfo ?: return ListenableWorker.Result.success()
-        val connectedSsid = wifiInfo.ssid?.removeSurrounding("\"") ?: return ListenableWorker.Result.success()
+        val connectedSsid = wifiInfo.ssid?.removeSurrounding("\"")?.lowercase() ?: return ListenableWorker.Result.success()
 
         val geofenceId = prefs.getString(connectedSsid, null) as? String
         if (geofenceId != null) {

@@ -23,7 +23,7 @@ import 'package:aitana/features/chat/ui/screens/main_chat_screen.dart';
 /// @return `Future<void>`
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize Foreground Service Configuration
   await ForegroundServiceControl.initForegroundTask();
 
