@@ -16,21 +16,22 @@ class AppTheme {
         surface: AppColors.deepIndigo,
         error: AppColors.error,
       ),
-      textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme).copyWith(
-        displayLarge: GoogleFonts.outfit(
-          color: AppColors.textHigh,
-          fontWeight: FontWeight.bold,
-          fontSize: 32,
-        ),
-        bodyLarge: GoogleFonts.outfit(
-          color: AppColors.textHigh,
-          fontSize: 16,
-        ),
-        bodyMedium: GoogleFonts.outfit(
-          color: AppColors.textMedium,
-          fontSize: 14,
-        ),
-      ),
+      textTheme: GoogleFonts.outfitTextTheme(ThemeData.dark().textTheme)
+          .copyWith(
+            displayLarge: GoogleFonts.outfit(
+              color: AppColors.textHigh,
+              fontWeight: FontWeight.bold,
+              fontSize: 32,
+            ),
+            bodyLarge: GoogleFonts.outfit(
+              color: AppColors.textHigh,
+              fontSize: 16,
+            ),
+            bodyMedium: GoogleFonts.outfit(
+              color: AppColors.textMedium,
+              fontSize: 14,
+            ),
+          ),
       appBarTheme: AppBarTheme(
         backgroundColor: Colors.transparent,
         elevation: 0,
@@ -65,9 +66,7 @@ class AppTheme {
           shape: RoundedRectangleBorder(
             borderRadius: BorderRadius.circular(12),
           ),
-          textStyle: GoogleFonts.outfit(
-            fontWeight: FontWeight.bold,
-          ),
+          textStyle: GoogleFonts.outfit(fontWeight: FontWeight.bold),
         ),
       ),
     );

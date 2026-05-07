@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
+import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
+import 'package:aitana/features/rag/screens/legal_library_screen.dart';
+import 'package:aitana/core/database/objectbox_service.dart';
 
 /// @brief A comprehensive developer toolkit menu.
 ///
@@ -43,7 +46,7 @@ class DevToolsBottomSheet extends StatelessWidget {
               ),
               const SizedBox(width: 12),
               const Text(
-                'AITANA_DEV_CORE',
+                'Developer Tools',
                 style: TextStyle(
                   color: Colors.white,
                   fontFamily: 'Outfit',
@@ -132,20 +135,91 @@ class DevToolsBottomSheet extends StatelessWidget {
                 },
               ),
               _DevToolTile(
-                title: 'API Inspector',
-                subtitle: 'Coming Soon',
-                icon: Icons.api_rounded,
-                color: Colors.white24,
-                enabled: false,
-                onTap: () {},
+                title: 'Persona Vault',
+                subtitle: 'LLM Identity Injector',
+                icon: Icons.psychology_rounded,
+                color: AppColors.cyberBlue,
+                enabled: true,
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const PersonaVaultScreen(),
+                    ),
+                  );
+                },
               ),
               _DevToolTile(
-                title: 'Neural Logs',
-                subtitle: 'LLM Context Audit',
-                icon: Icons.psychology_rounded,
-                color: Colors.white24,
-                enabled: false,
-                onTap: () {},
+                title: 'Legal Library',
+                subtitle: 'Offline RAG Sources',
+                icon: Icons.account_balance_rounded,
+                color: AppColors.cyberBlue,
+                enabled: true,
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const LegalLibraryScreen(),
+                    ),
+                  );
+                },
+              ),
+              _DevToolTile(
+                title: 'Nuke Database',
+                subtitle: 'Wipe Persona & RAG Library',
+                icon: Icons.delete_forever_rounded,
+                color: Colors.redAccent,
+                onTap: () {
+                  // Capture the messenger BEFORE popping the bottom sheet
+                  final rootMessenger = ScaffoldMessenger.of(context);
+
+                  Navigator.pop(context);
+                  showDialog(
+                    context: context,
+                    builder: (BuildContext dialogContext) {
+                      return AlertDialog(
+                        backgroundColor: const Color(0xFF1E1F20),
+                        title: const Text(
+                          'Ruthless Nuke?',
+                          style: TextStyle(color: Colors.white),
+                        ),
+                        content: const Text(
+                          'Are you sure you want to wipe the Personas and Legal Library? This deletes physical PDF files and requires an app restart.',
+                          style: TextStyle(color: Colors.white70),
+                        ),
+                        actions: [
+                          TextButton(
+                            child: const Text(
+                              'Cancel',
+                              style: TextStyle(color: Colors.white54),
+                            ),
+                            onPressed: () => Navigator.of(dialogContext).pop(),
+                          ),
+                          TextButton(
+                            child: const Text(
+                              'Yes, Nuke it',
+                              style: TextStyle(color: Colors.redAccent),
+                            ),
+                            onPressed: () async {
+                              Navigator.of(dialogContext).pop();
+                              await ObjectBoxService.instance.nukeDatabase();
+
+                              rootMessenger.showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Database Nuked. Physical files deleted. Please restart the app.',
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
               ),
             ],
           ),

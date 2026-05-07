@@ -50,6 +50,8 @@ dependencies:
   device_calendar: ^4.3.3
   flutter_foreground_task: ^7.1.0
   network_info_plus: ^6.0.1
+  file_picker: ^11.0.2
+  syncfusion_flutter_pdf: ^33.2.4
 
 dev_dependencies:
   flutter_test:

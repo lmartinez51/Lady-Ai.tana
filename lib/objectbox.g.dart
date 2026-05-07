@@ -16,6 +16,9 @@ import 'package:objectbox_flutter_libs/objectbox_flutter_libs.dart';
 
 import 'core/domain/entities/chat_session.dart';
 import 'core/domain/entities/geofence_record.dart';
+import 'features/rag/models/legal_document_record.dart';
+import 'features/rag/models/legal_knowledge_chunk.dart';
+import 'features/settings/models/persona_record.dart';
 
 export 'package:objectbox/objectbox.dart'; // so that callers only have to import this file
 
@@ -69,7 +72,7 @@ final _entities = <obx_int.ModelEntity>[
   obx_int.ModelEntity(
     id: const obx_int.IdUid(3, 1884956132443171885),
     name: 'GeofenceRecord',
-    lastPropertyId: const obx_int.IdUid(6, 7092151286479245659),
+    lastPropertyId: const obx_int.IdUid(7, 4466340117118187107),
     flags: 0,
     properties: <obx_int.ModelProperty>[
       obx_int.ModelProperty(
@@ -108,9 +111,188 @@ final _entities = <obx_int.ModelEntity>[
         type: 10,
         flags: 0,
       ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(7, 4466340117118187107),
+        name: 'validSsids',
+        type: 30,
+        flags: 0,
+      ),
     ],
     relations: <obx_int.ModelRelation>[],
     backlinks: <obx_int.ModelBacklink>[],
+  ),
+  obx_int.ModelEntity(
+    id: const obx_int.IdUid(4, 4202592172897918215),
+    name: 'PersonaRecord',
+    lastPropertyId: const obx_int.IdUid(9, 4074503938768558934),
+    flags: 0,
+    properties: <obx_int.ModelProperty>[
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(1, 8224663925792098882),
+        name: 'id',
+        type: 6,
+        flags: 1,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(2, 864822024806057762),
+        name: 'name',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(4, 7274788355029872125),
+        name: 'isActive',
+        type: 1,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(6, 3867443042063554608),
+        name: 'category',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(7, 7007513853071994607),
+        name: 'promptEs',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(8, 6470600300167286465),
+        name: 'promptEn',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(9, 4074503938768558934),
+        name: 'defaultLang',
+        type: 9,
+        flags: 0,
+      ),
+    ],
+    relations: <obx_int.ModelRelation>[],
+    backlinks: <obx_int.ModelBacklink>[],
+  ),
+  obx_int.ModelEntity(
+    id: const obx_int.IdUid(5, 8310334134004658179),
+    name: 'LegalKnowledgeChunk',
+    lastPropertyId: const obx_int.IdUid(8, 5635628095577414895),
+    flags: 0,
+    properties: <obx_int.ModelProperty>[
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(1, 7925842440799757423),
+        name: 'id',
+        type: 6,
+        flags: 1,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(2, 5416157175985453592),
+        name: 'documentName',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(3, 8839600152883580829),
+        name: 'chapterContext',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(4, 2103082737694295831),
+        name: 'sectionContext',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(5, 6283477565950664057),
+        name: 'rawText',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(6, 773883312216935507),
+        name: 'searchableText',
+        type: 9,
+        flags: 8,
+        indexId: const obx_int.IdUid(1, 7655149427160378126),
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(7, 6178181959745896744),
+        name: 'documentId',
+        type: 11,
+        flags: 520,
+        indexId: const obx_int.IdUid(3, 494954052907302959),
+        relationField: 'document',
+        relationTarget: 'LegalDocumentRecord',
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(8, 5635628095577414895),
+        name: 'authorityWeight',
+        type: 6,
+        flags: 0,
+      ),
+    ],
+    relations: <obx_int.ModelRelation>[],
+    backlinks: <obx_int.ModelBacklink>[],
+  ),
+  obx_int.ModelEntity(
+    id: const obx_int.IdUid(6, 7890443548151950447),
+    name: 'LegalDocumentRecord',
+    lastPropertyId: const obx_int.IdUid(7, 8657819355487173635),
+    flags: 0,
+    properties: <obx_int.ModelProperty>[
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(1, 5172749287308473593),
+        name: 'id',
+        type: 6,
+        flags: 1,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(2, 4333654132331178412),
+        name: 'title',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(3, 2037682073892423712),
+        name: 'authorOrSource',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(4, 8195808753843340152),
+        name: 'uploadDate',
+        type: 10,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(5, 418556515491748462),
+        name: 'chunkCount',
+        type: 6,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(6, 1347663133206071346),
+        name: 'fileName',
+        type: 9,
+        flags: 8,
+        indexId: const obx_int.IdUid(2, 8098151667519924248),
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(7, 8657819355487173635),
+        name: 'category',
+        type: 9,
+        flags: 0,
+      ),
+    ],
+    relations: <obx_int.ModelRelation>[],
+    backlinks: <obx_int.ModelBacklink>[
+      obx_int.ModelBacklink(
+        name: 'chunks',
+        srcEntity: 'LegalKnowledgeChunk',
+        srcField: 'document',
+      ),
+    ],
   ),
 ];
 
@@ -157,8 +339,8 @@ obx_int.ModelDefinition getObjectBoxModel() {
     // Typically, this is done with `dart run build_runner build`.
     generatorVersion: obx_int.GeneratorVersion.v2025_12_16,
     entities: _entities,
-    lastEntityId: const obx_int.IdUid(3, 1884956132443171885),
-    lastIndexId: const obx_int.IdUid(0, 0),
+    lastEntityId: const obx_int.IdUid(6, 7890443548151950447),
+    lastIndexId: const obx_int.IdUid(3, 494954052907302959),
     lastRelationId: const obx_int.IdUid(0, 0),
     lastSequenceId: const obx_int.IdUid(0, 0),
     retiredEntityUids: const [2748509642828762004],
@@ -172,6 +354,8 @@ obx_int.ModelDefinition getObjectBoxModel() {
       4021619386010667007,
       8618388945897920214,
       5986985217120189751,
+      9025568968839982141,
+      7069192966358520109,
     ],
     retiredRelationUids: const [],
     modelVersion: 5,
@@ -252,13 +436,17 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final titleOffset = fbb.writeString(object.title);
         final locationKeyOffset = fbb.writeString(object.locationKey);
         final statusOffset = fbb.writeString(object.status);
-        fbb.startTable(7);
+        final validSsidsOffset = fbb.writeList(
+          object.validSsids.map(fbb.writeString).toList(growable: false),
+        );
+        fbb.startTable(8);
         fbb.addInt64(0, object.id);
         fbb.addOffset(1, titleOffset);
         fbb.addOffset(2, locationKeyOffset);
         fbb.addOffset(3, statusOffset);
         fbb.addInt64(4, object.createdAt.millisecondsSinceEpoch);
         fbb.addInt64(5, object.triggeredAt?.millisecondsSinceEpoch);
+        fbb.addOffset(6, validSsidsOffset);
         fbb.finish(fbb.endTable());
         return object.id;
       },
@@ -285,6 +473,10 @@ obx_int.ModelDefinition getObjectBoxModel() {
         final statusParam = const fb.StringReader(
           asciiOptimization: true,
         ).vTableGet(buffer, rootOffset, 10, '');
+        final validSsidsParam = const fb.ListReader<String>(
+          fb.StringReader(asciiOptimization: true),
+          lazy: false,
+        ).vTableGet(buffer, rootOffset, 16, []);
         final createdAtParam = DateTime.fromMillisecondsSinceEpoch(
           const fb.Int64Reader().vTableGet(buffer, rootOffset, 12, 0),
         );
@@ -296,10 +488,235 @@ obx_int.ModelDefinition getObjectBoxModel() {
           title: titleParam,
           locationKey: locationKeyParam,
           status: statusParam,
+          validSsids: validSsidsParam,
           createdAt: createdAtParam,
           triggeredAt: triggeredAtParam,
         );
 
+        return object;
+      },
+    ),
+    PersonaRecord: obx_int.EntityDefinition<PersonaRecord>(
+      model: _entities[2],
+      toOneRelations: (PersonaRecord object) => [],
+      toManyRelations: (PersonaRecord object) => {},
+      getId: (PersonaRecord object) => object.id,
+      setId: (PersonaRecord object, int id) {
+        object.id = id;
+      },
+      objectToFB: (PersonaRecord object, fb.Builder fbb) {
+        final nameOffset = fbb.writeString(object.name);
+        final categoryOffset = fbb.writeString(object.category);
+        final promptEsOffset = fbb.writeString(object.promptEs);
+        final promptEnOffset = fbb.writeString(object.promptEn);
+        final defaultLangOffset = fbb.writeString(object.defaultLang);
+        fbb.startTable(10);
+        fbb.addInt64(0, object.id);
+        fbb.addOffset(1, nameOffset);
+        fbb.addBool(3, object.isActive);
+        fbb.addOffset(5, categoryOffset);
+        fbb.addOffset(6, promptEsOffset);
+        fbb.addOffset(7, promptEnOffset);
+        fbb.addOffset(8, defaultLangOffset);
+        fbb.finish(fbb.endTable());
+        return object.id;
+      },
+      objectFromFB: (obx.Store store, ByteData fbData) {
+        final buffer = fb.BufferContext(fbData);
+        final rootOffset = buffer.derefObject(0);
+        final idParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          4,
+          0,
+        );
+        final nameParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 6, '');
+        final categoryParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 14, '');
+        final promptEsParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 16, '');
+        final promptEnParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 18, '');
+        final defaultLangParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 20, '');
+        final isActiveParam = const fb.BoolReader().vTableGet(
+          buffer,
+          rootOffset,
+          10,
+          false,
+        );
+        final object = PersonaRecord(
+          id: idParam,
+          name: nameParam,
+          category: categoryParam,
+          promptEs: promptEsParam,
+          promptEn: promptEnParam,
+          defaultLang: defaultLangParam,
+          isActive: isActiveParam,
+        );
+
+        return object;
+      },
+    ),
+    LegalKnowledgeChunk: obx_int.EntityDefinition<LegalKnowledgeChunk>(
+      model: _entities[3],
+      toOneRelations: (LegalKnowledgeChunk object) => [object.document],
+      toManyRelations: (LegalKnowledgeChunk object) => {},
+      getId: (LegalKnowledgeChunk object) => object.id,
+      setId: (LegalKnowledgeChunk object, int id) {
+        object.id = id;
+      },
+      objectToFB: (LegalKnowledgeChunk object, fb.Builder fbb) {
+        final documentNameOffset = fbb.writeString(object.documentName);
+        final chapterContextOffset = fbb.writeString(object.chapterContext);
+        final sectionContextOffset = fbb.writeString(object.sectionContext);
+        final rawTextOffset = fbb.writeString(object.rawText);
+        final searchableTextOffset = fbb.writeString(object.searchableText);
+        fbb.startTable(9);
+        fbb.addInt64(0, object.id);
+        fbb.addOffset(1, documentNameOffset);
+        fbb.addOffset(2, chapterContextOffset);
+        fbb.addOffset(3, sectionContextOffset);
+        fbb.addOffset(4, rawTextOffset);
+        fbb.addOffset(5, searchableTextOffset);
+        fbb.addInt64(6, object.document.targetId);
+        fbb.addInt64(7, object.authorityWeight);
+        fbb.finish(fbb.endTable());
+        return object.id;
+      },
+      objectFromFB: (obx.Store store, ByteData fbData) {
+        final buffer = fb.BufferContext(fbData);
+        final rootOffset = buffer.derefObject(0);
+        final idParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          4,
+          0,
+        );
+        final documentNameParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 6, '');
+        final chapterContextParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 8, '');
+        final sectionContextParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 10, '');
+        final rawTextParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 12, '');
+        final searchableTextParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 14, '');
+        final authorityWeightParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          18,
+          0,
+        );
+        final object = LegalKnowledgeChunk(
+          id: idParam,
+          documentName: documentNameParam,
+          chapterContext: chapterContextParam,
+          sectionContext: sectionContextParam,
+          rawText: rawTextParam,
+          searchableText: searchableTextParam,
+          authorityWeight: authorityWeightParam,
+        );
+        object.document.targetId = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          16,
+          0,
+        );
+        object.document.attach(store);
+        return object;
+      },
+    ),
+    LegalDocumentRecord: obx_int.EntityDefinition<LegalDocumentRecord>(
+      model: _entities[4],
+      toOneRelations: (LegalDocumentRecord object) => [],
+      toManyRelations: (LegalDocumentRecord object) => {
+        obx_int.RelInfo<LegalKnowledgeChunk>.toOneBacklink(
+          7,
+          object.id,
+          (LegalKnowledgeChunk srcObject) => srcObject.document,
+        ): object.chunks,
+      },
+      getId: (LegalDocumentRecord object) => object.id,
+      setId: (LegalDocumentRecord object, int id) {
+        object.id = id;
+      },
+      objectToFB: (LegalDocumentRecord object, fb.Builder fbb) {
+        final titleOffset = fbb.writeString(object.title);
+        final authorOrSourceOffset = fbb.writeString(object.authorOrSource);
+        final fileNameOffset = fbb.writeString(object.fileName);
+        final categoryOffset = fbb.writeString(object.category);
+        fbb.startTable(8);
+        fbb.addInt64(0, object.id);
+        fbb.addOffset(1, titleOffset);
+        fbb.addOffset(2, authorOrSourceOffset);
+        fbb.addInt64(3, object.uploadDate.millisecondsSinceEpoch);
+        fbb.addInt64(4, object.chunkCount);
+        fbb.addOffset(5, fileNameOffset);
+        fbb.addOffset(6, categoryOffset);
+        fbb.finish(fbb.endTable());
+        return object.id;
+      },
+      objectFromFB: (obx.Store store, ByteData fbData) {
+        final buffer = fb.BufferContext(fbData);
+        final rootOffset = buffer.derefObject(0);
+        final idParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          4,
+          0,
+        );
+        final titleParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 6, '');
+        final authorOrSourceParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 8, '');
+        final uploadDateParam = DateTime.fromMillisecondsSinceEpoch(
+          const fb.Int64Reader().vTableGet(buffer, rootOffset, 10, 0),
+        );
+        final chunkCountParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          12,
+          0,
+        );
+        final fileNameParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 14, '');
+        final categoryParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 16, '');
+        final object = LegalDocumentRecord(
+          id: idParam,
+          title: titleParam,
+          authorOrSource: authorOrSourceParam,
+          uploadDate: uploadDateParam,
+          chunkCount: chunkCountParam,
+          fileName: fileNameParam,
+          category: categoryParam,
+        );
+        obx_int.InternalToManyAccess.setRelInfo<LegalDocumentRecord>(
+          object.chunks,
+          store,
+          obx_int.RelInfo<LegalKnowledgeChunk>.toOneBacklink(
+            7,
+            object.id,
+            (LegalKnowledgeChunk srcObject) => srcObject.document,
+          ),
+        );
         return object;
       },
     ),
@@ -372,4 +789,135 @@ class GeofenceRecord_ {
   static final triggeredAt = obx.QueryDateProperty<GeofenceRecord>(
     _entities[1].properties[5],
   );
+
+  /// See [GeofenceRecord.validSsids].
+  static final validSsids = obx.QueryStringVectorProperty<GeofenceRecord>(
+    _entities[1].properties[6],
+  );
+}
+
+/// [PersonaRecord] entity fields to define ObjectBox queries.
+class PersonaRecord_ {
+  /// See [PersonaRecord.id].
+  static final id = obx.QueryIntegerProperty<PersonaRecord>(
+    _entities[2].properties[0],
+  );
+
+  /// See [PersonaRecord.name].
+  static final name = obx.QueryStringProperty<PersonaRecord>(
+    _entities[2].properties[1],
+  );
+
+  /// See [PersonaRecord.isActive].
+  static final isActive = obx.QueryBooleanProperty<PersonaRecord>(
+    _entities[2].properties[2],
+  );
+
+  /// See [PersonaRecord.category].
+  static final category = obx.QueryStringProperty<PersonaRecord>(
+    _entities[2].properties[3],
+  );
+
+  /// See [PersonaRecord.promptEs].
+  static final promptEs = obx.QueryStringProperty<PersonaRecord>(
+    _entities[2].properties[4],
+  );
+
+  /// See [PersonaRecord.promptEn].
+  static final promptEn = obx.QueryStringProperty<PersonaRecord>(
+    _entities[2].properties[5],
+  );
+
+  /// See [PersonaRecord.defaultLang].
+  static final defaultLang = obx.QueryStringProperty<PersonaRecord>(
+    _entities[2].properties[6],
+  );
+}
+
+/// [LegalKnowledgeChunk] entity fields to define ObjectBox queries.
+class LegalKnowledgeChunk_ {
+  /// See [LegalKnowledgeChunk.id].
+  static final id = obx.QueryIntegerProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[0],
+  );
+
+  /// See [LegalKnowledgeChunk.documentName].
+  static final documentName = obx.QueryStringProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[1],
+  );
+
+  /// See [LegalKnowledgeChunk.chapterContext].
+  static final chapterContext = obx.QueryStringProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[2],
+  );
+
+  /// See [LegalKnowledgeChunk.sectionContext].
+  static final sectionContext = obx.QueryStringProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[3],
+  );
+
+  /// See [LegalKnowledgeChunk.rawText].
+  static final rawText = obx.QueryStringProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[4],
+  );
+
+  /// See [LegalKnowledgeChunk.searchableText].
+  static final searchableText = obx.QueryStringProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[5],
+  );
+
+  /// See [LegalKnowledgeChunk.document].
+  static final document =
+      obx.QueryRelationToOne<LegalKnowledgeChunk, LegalDocumentRecord>(
+        _entities[3].properties[6],
+      );
+
+  /// See [LegalKnowledgeChunk.authorityWeight].
+  static final authorityWeight = obx.QueryIntegerProperty<LegalKnowledgeChunk>(
+    _entities[3].properties[7],
+  );
+}
+
+/// [LegalDocumentRecord] entity fields to define ObjectBox queries.
+class LegalDocumentRecord_ {
+  /// See [LegalDocumentRecord.id].
+  static final id = obx.QueryIntegerProperty<LegalDocumentRecord>(
+    _entities[4].properties[0],
+  );
+
+  /// See [LegalDocumentRecord.title].
+  static final title = obx.QueryStringProperty<LegalDocumentRecord>(
+    _entities[4].properties[1],
+  );
+
+  /// See [LegalDocumentRecord.authorOrSource].
+  static final authorOrSource = obx.QueryStringProperty<LegalDocumentRecord>(
+    _entities[4].properties[2],
+  );
+
+  /// See [LegalDocumentRecord.uploadDate].
+  static final uploadDate = obx.QueryDateProperty<LegalDocumentRecord>(
+    _entities[4].properties[3],
+  );
+
+  /// See [LegalDocumentRecord.chunkCount].
+  static final chunkCount = obx.QueryIntegerProperty<LegalDocumentRecord>(
+    _entities[4].properties[4],
+  );
+
+  /// See [LegalDocumentRecord.fileName].
+  static final fileName = obx.QueryStringProperty<LegalDocumentRecord>(
+    _entities[4].properties[5],
+  );
+
+  /// See [LegalDocumentRecord.category].
+  static final category = obx.QueryStringProperty<LegalDocumentRecord>(
+    _entities[4].properties[6],
+  );
+
+  /// see [LegalDocumentRecord.chunks]
+  static final chunks =
+      obx.QueryBacklinkToMany<LegalKnowledgeChunk, LegalDocumentRecord>(
+        LegalKnowledgeChunk_.document,
+      );
 }

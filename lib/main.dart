@@ -5,6 +5,7 @@
 // @version 1.0.0
 
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
+import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
@@ -42,6 +43,24 @@ void main() async {
 
     // Sincronizar estado de geofencing pendiente
     await GeofenceService().init();
+
+    // 🧠 MoE Startup Routing: select the correct model before the engine loads.
+    // If the persisted active persona is LEGAL, the native layer must receive
+    // 'gemma_4b_variant' on the very first initModel() call. Without this,
+    // a cold restart would silently load the standard model despite LEGAL
+    // being active — breaking the factual accuracy guarantee.
+    final startupPersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    if (startupPersona.category == 'LEGAL') {
+      final variantModel = AiModelCatalog.findByBaseName('gemma_4b_variant');
+      if (variantModel != null) {
+        LocalLlmService.currentModel.value = variantModel;
+        debugPrint(
+          '🧠 [MoE Startup] LEGAL persona active → '
+          'pre-selecting ${variantModel.displayName}',
+        );
+      }
+    }
 
     // 🧠 Arrancamos el cerebro de Aitana y le conectamos la base de datos
     await LocalLlmService.initModel();

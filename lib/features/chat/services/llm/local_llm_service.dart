@@ -24,21 +24,15 @@ import 'package:aitana/core/constants/native_channels.dart';
 ///   so the UI only ever receives the model's final polished response.
 /// - Tool listener setup for the `manage_agenda` native callback.
 class LocalLlmService {
-  static const MethodChannel _channel = MethodChannel(
-    NativeChannels.aiCore,
-  );
+  static const MethodChannel _channel = MethodChannel(NativeChannels.aiCore);
   static const EventChannel _streamChannel = EventChannel(
     NativeChannels.aiCoreStream,
   );
 
   // ─── Internal state ───────────────────────────────────────────────────────
 
+  static String currentLanguage = 'ES';
   static bool _isInitialized = false;
-
-  /// Toggles the AI persona between Mexican Spanish (default) and
-  /// Sarcastic American English (YouTube demo mode).
-  /// Flip this flag then call [clearContext] to apply immediately.
-  static bool isEnglishDemoMode = true;
 
   /// In-flight initialization guard.
   ///
@@ -74,6 +68,9 @@ class LocalLlmService {
   /// block to guarantee the lock is never left stuck on error.
   static final ValueNotifier<bool> isEngineBusy = ValueNotifier<bool>(false);
 
+  /// Emits true while the inference engine is busy generating tokens.
+  static final ValueNotifier<bool> isGeneratingNotifier = ValueNotifier(false);
+
   /// Lazily-initialized broadcast stream. Reset to `null` when never needed.
   static Stream<dynamic>? _tokenStream;
 
@@ -91,6 +88,57 @@ class LocalLlmService {
   /// Summary of the previous session. It is filled when loading a chat from history.
   static String activeSessionSummary = '';
 
+  // ─── RAG Gatekeeper ───────────────────────────────────────────────────────
+
+  /// Normalized words that signal a conversational (non-legal) message.
+  ///
+  /// If ALL meaningful keywords in a query are present in this set, the RAG
+  /// pipeline is skipped entirely — Gate 2 blocks the search.
+  static const Set<String> _conversationalSignals = {
+    // Spanish
+    'hola', 'adios', 'gracias', 'ayuda', 'recuerdas', 'dijiste', 'ayer',
+    'manana', 'buenas', 'claro', 'perfecto', 'bien', 'vale',
+    // English
+    'hello', 'goodbye', 'thanks', 'thank', 'remember', 'said', 'yesterday',
+    'tomorrow', 'sure', 'okay', 'great', 'good',
+  };
+
+  /// Normalizes a raw message to a deduplicated set of 4+ char keywords,
+  /// mirroring the chunker's normalization to ensure index compatibility.
+  static Set<String> _normalizeToKeywords(String text) {
+    String normalized = text.toLowerCase();
+    normalized = normalized.replaceAll(RegExp(r'[áàäâã]'), 'a');
+    normalized = normalized.replaceAll(RegExp(r'[éèëê]'), 'e');
+    normalized = normalized.replaceAll(RegExp(r'[íìïî]'), 'i');
+    normalized = normalized.replaceAll(RegExp(r'[óòöôõ]'), 'o');
+    normalized = normalized.replaceAll(RegExp(r'[úùüû]'), 'u');
+    normalized = normalized.replaceAll(RegExp(r'[ñ]'), 'n');
+    normalized = normalized.replaceAll(RegExp(r'[^\w\s]'), '');
+
+    // ── Preprocessing: Normalize Legal Ordinals ─────────────────────────────
+    // Convert written suffixes like "4to", "4vo" into the official "4o".
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\b(\d+)(to|vo|no|mo|avo)\b'),
+      (match) => '${match.group(1)}o',
+    );
+    // Convert standalone digits following "articulo" or "art" into ordinals.
+    // E.g. "articulo 4" -> "articulo 4o". Lookahead ensures no double 'o'.
+    normalized = normalized.replaceAllMapped(
+      RegExp(r'\b(articulo|art)\s+(\d+)(?!o)\b'),
+      (match) => '${match.group(1)} ${match.group(2)}o',
+    );
+    // ────────────────────────────────────────────────────────────────────────
+
+    return normalized.split(RegExp(r'\s+')).where((k) => k.length >= 2).toSet();
+  }
+
+  /// Returns `true` if the keyword set contains at least one non-conversational
+  /// term that could plausibly match legal document text.
+  static bool _isLikelyLegalQuery(Set<String> keywords) {
+    final legalKeywords = keywords.difference(_conversationalSignals);
+    return legalKeywords.length >= 2;
+  }
+
   // ─── System Prompt ────────────────────────────────────────────────────────
 
   /// Constructs the dynamic system prompt for the current turn.
@@ -100,15 +148,100 @@ class LocalLlmService {
   /// of the system instruction string. This activates the model's built-in
   /// thought channel for the entire session without requiring per-turn prefixes.
 
-  static Future<String> _buildSystemPrompt([String? armedToolHint]) async {
+  static Future<String> _buildSystemPrompt([
+    String? armedToolHint,
+    String? userMessage,
+  ]) async {
+    // ── RAG Gatekeeper Pipeline ────────────────────────────────────────────
+    String? retrievedLegalContext;
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+
+    if (activePersona.category == 'LEGAL' &&
+        userMessage != null &&
+        userMessage.isNotEmpty) {
+      // Gate 0: Is the legal library populated at all?
+      if (!ObjectBoxService.instance.hasLegalKnowledge) {
+        debugPrint('🚫 [RAG Gate 0] Library is empty. Skipping search.');
+      } else {
+        // Gate 1: Does the query have enough meaningful keywords?
+        final keywords = _normalizeToKeywords(userMessage);
+        if (keywords.length < 2) {
+          debugPrint(
+            '🚫 [RAG Gate 1] Too few keywords (${keywords.length}). Skipping search.',
+          );
+        } else if (!_isLikelyLegalQuery(keywords)) {
+          // Gate 2: Is it likely a legal query vs. a conversational message?
+          debugPrint(
+            '🚫 [RAG Gate 2] Query appears conversational. Skipping search.',
+          );
+        } else {
+          // Gate 3: Execute retrieval and apply score threshold
+          debugPrint('🔍 [RAG Gate 3] Querying: "$userMessage"');
+          final ranked = ObjectBoxService.instance.searchLegalContext(
+            userMessage,
+            limit: 6,
+          );
+          debugPrint('📊 [RAG] Chunks retrieved: ${ranked.length}');
+
+          if (ranked.isEmpty || ranked.first.score < 2) {
+            debugPrint(
+              '🚫 [RAG Gate 3] Top score (${ranked.isEmpty ? 0 : ranked.first.score}) '
+              'below threshold of 2. Aborting injection.',
+            );
+          } else {
+            // ✅ All gates passed — build the context string
+            final buffer = StringBuffer();
+            for (final entry in ranked) {
+              final authLabel = entry.chunk.authorityWeight == 3
+                  ? 'HIGHEST AUTHORITY (Ley/Código)'
+                  : entry.chunk.authorityWeight == 2
+                  ? 'HIGH AUTHORITY (Jurisprudencia)'
+                  : 'STANDARD AUTHORITY (Doctrina)';
+
+              buffer.writeln(
+                'Document: ${entry.chunk.documentName} [$authLabel]',
+              );
+              if (entry.chunk.chapterContext.isNotEmpty) {
+                buffer.writeln(
+                  'Context: ${entry.chunk.chapterContext} / ${entry.chunk.sectionContext}',
+                );
+              }
+              buffer.writeln(entry.chunk.rawText);
+              buffer.writeln('---');
+            }
+            retrievedLegalContext = buffer.toString().trim();
+            final snippetEnd = retrievedLegalContext.length > 200
+                ? 200
+                : retrievedLegalContext.length;
+            debugPrint(
+              '📚 [RAG] ✅ Injecting ${ranked.length} chunks (top score: ${ranked.first.score}):\n${retrievedLegalContext.substring(0, snippetEnd)}...',
+            );
+          }
+        }
+      }
+    }
+
     return PromptManager.buildSystemPrompt(
       modelBaseName: currentModel.value.baseName,
-      isEnglishDemoMode: isEnglishDemoMode,
       activeSessionSummary: activeSessionSummary,
       getTodayEvents: () => CalendarService().getTodayEvents(),
       enableThinking: _currentParams.enableThinking,
       armedToolHint: armedToolHint,
+      retrievedLegalContext: retrievedLegalContext,
     );
+  }
+
+  /// Encapsulates the state-clearing logic previously used in the UI.
+  /// Clears the LLM context, clears the active session summary, and
+  /// executes the provided callback to clear UI messages and session IDs.
+  static Future<void> resetSessionState({Function()? onClearUi}) async {
+    await clearContext();
+
+    activeSessionSummary = '';
+    if (onClearUi != null) {
+      onClearUi();
+    }
   }
 
   // ─── Stream access ────────────────────────────────────────────────────────
@@ -119,6 +252,22 @@ class LocalLlmService {
   }
 
   // ─── Public API ───────────────────────────────────────────────────────────
+
+  /// Gracefully stops any active inference mid-stream.
+  ///
+  /// Cancels the active [StreamSubscription] and signals completion with
+  /// whatever text the model has generated so far. This is the correct
+  /// handler for the UI's "Stop Generation" button — it works during both
+  /// the thinking phase AND the active text-generation phase.
+  ///
+  /// No-op if no inference is currently in progress.
+  static void stopInference() {
+    if (_activeSubscription == null) return;
+    debugPrint('🛑 [LocalLlmService] stopInference() called by user.');
+    _activeSubscription?.cancel();
+    _activeSubscription = null;
+    // _isGenerating is reset in the `finally` block of runInference().
+  }
 
   static Future<dynamic> _handleManageCalendar(
     Map<dynamic, dynamic> args,
@@ -287,6 +436,41 @@ class LocalLlmService {
     }
   }
 
+  /// Routes to the correct AI model based on the newly activated persona category.
+  ///
+  /// - `'LEGAL'` → `gemma_4b_variant` (Uncensored, higher factual fidelity).
+  /// - `'AI'` / `'HUMAN'` → `gemma_4b` (Standard, conversational default).
+  ///
+  /// Returns [ModelSwitchResult.alreadyActive] if the required model is already
+  /// loaded, avoiding an unnecessary native reload cycle.
+  static Future<ModelSwitchResult> autoSwitchModelForCategory(
+    String category,
+  ) async {
+    final targetBaseName = category == 'LEGAL'
+        ? 'gemma_4b_variant'
+        : 'gemma_4b';
+
+    final target = AiModelCatalog.findByBaseName(targetBaseName);
+    if (target == null) {
+      debugPrint(
+        '🔴 [MoE Router] Model "$targetBaseName" not found in catalog.',
+      );
+      return ModelSwitchResult.notInCatalog;
+    }
+
+    if (currentModel.value.baseName == target.baseName) {
+      debugPrint(
+        '⚡ [MoE Router] "${target.displayName}" already active. No switch needed.',
+      );
+      return ModelSwitchResult.alreadyActive;
+    }
+
+    debugPrint(
+      '🧠 [MoE Router] Persona category "$category" → switching to "${target.displayName}"',
+    );
+    return switchModel(target);
+  }
+
   /// Updates the active sampler parameters and **invalidates** the current
   /// native `Conversation` object so the new [SamplerConfig] takes effect
   /// on the very next inference call (lazy re-creation pattern).
@@ -308,6 +492,7 @@ class LocalLlmService {
     debugPrint('🧹 [LocalLlmService] Reseteando conversación nativa.');
 
     activeSessionSummary = '';
+
     await _channel.invokeMethod('resetConversation');
 
     try {
@@ -435,6 +620,7 @@ class LocalLlmService {
     ToolParser? toolParser;
     try {
       _isGenerating = true;
+      isGeneratingNotifier.value = true;
 
       if (!_isInitialized) {
         final initResult = await initModel();
@@ -501,6 +687,38 @@ class LocalLlmService {
       }
 
       final completer = Completer<String>();
+
+      // ── Dart-side Sliding Window Repetition Guard ────────────────────────
+      // Maintains a rolling buffer of the last ~80 tokens (as a joined string).
+      // After every token, it tests whether a 10-word phrase appears 3+ times.
+      // If so, the stream is force-cancelled and inference is terminated with
+      // a diagnostic notice. This is the last-resort fallback when the native
+      // engine's repetition_penalty parameter fails to break the feedback loop.
+      final List<String> tokenBuffer = [];
+      const int bufferMaxTokens = 80;
+      const int phraseWords = 10;
+      const int repeatThreshold = 3;
+
+      bool detectRepetition(List<String> buffer) {
+        if (buffer.length < phraseWords * repeatThreshold) return false;
+        final text = buffer.join(' ');
+        final words = text.split(' ');
+        // Slide a 10-word window; check if it appears >= 3 times in the buffer.
+        for (int i = 0; i <= words.length - phraseWords; i++) {
+          final phrase = words.sublist(i, i + phraseWords).join(' ');
+          int count = 0;
+          int searchStart = 0;
+          while (true) {
+            final idx = text.indexOf(phrase, searchStart);
+            if (idx == -1) break;
+            count++;
+            if (count >= repeatThreshold) return true;
+            searchStart = idx + 1;
+          }
+        }
+        return false;
+      }
+
       _activeSubscription?.cancel(); // Cancel any stale subscription first.
       _activeSubscription = _stream.listen(
         (event) {
@@ -511,6 +729,28 @@ class LocalLlmService {
             _activeSubscription = null;
             if (!completer.isCompleted) {
               completer.complete(toolParser?.getFinalCleanText() ?? '');
+            }
+            return;
+          }
+
+          // Feed the repetition guard.
+          tokenBuffer.add(token);
+          if (tokenBuffer.length > bufferMaxTokens) {
+            tokenBuffer.removeAt(0);
+          }
+          if (detectRepetition(tokenBuffer)) {
+            debugPrint(
+              '🔁 [LocalLlmService] Repetition loop detected — force-terminating inference.',
+            );
+            _activeSubscription?.cancel();
+            _activeSubscription = null;
+            if (!completer.isCompleted) {
+              final partial = toolParser?.getFinalCleanText() ?? '';
+              completer.complete(
+                partial.isNotEmpty
+                    ? '$partial\n\n[INFERENCE TERMINATED: REPETITION LOOP DETECTED]'
+                    : '[INFERENCE TERMINATED: REPETITION LOOP DETECTED]',
+              );
             }
             return;
           }
@@ -526,7 +766,11 @@ class LocalLlmService {
       );
 
       // ── Dispatch the MethodChannel call for the correct modality ─────────────
-      final systemPrompt = await _buildSystemPrompt(toolHint);
+      final systemPrompt = await _buildSystemPrompt(toolHint, prompt);
+
+      debugPrint('=== FINAL SYSTEM PROMPT SENT TO KOTLIN ===');
+      debugPrint(systemPrompt);
+      debugPrint('==========================================');
 
       if (audioPath != null && audioPath.isNotEmpty) {
         const audioDirective = PromptManager.audioDirective;
@@ -589,6 +833,7 @@ class LocalLlmService {
       toolParser?.disarmParser();
       _activeSubscription = null;
       _isGenerating = false;
+      isGeneratingNotifier.value = false;
     }
   }
 

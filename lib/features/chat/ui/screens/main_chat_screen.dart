@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:aitana/core/domain/entities/chat_session.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -13,6 +14,7 @@ import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
+import 'package:aitana/features/chat/services/llm/models/llm_inference_params.dart';
 import 'package:aitana/features/chat/ui/dialogs/settings_dialog_widget.dart';
 import 'package:aitana/features/auth/providers/auth_provider.dart';
 import 'package:aitana/features/chat/ui/widgets/exit_sequence_widget.dart';
@@ -34,6 +36,8 @@ class MainChatScreen extends StatefulWidget {
 class _MainChatScreenState extends State<MainChatScreen>
     with WidgetsBindingObserver {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<VoiceInputPanelState> _voiceKey =
+      GlobalKey<VoiceInputPanelState>();
 
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
@@ -91,6 +95,7 @@ class _MainChatScreenState extends State<MainChatScreen>
   double _topP = 0.90;
   int _topK = 40;
   bool _enableThinking = false;
+  String? _lastPersonaCategory;
 
   @override
   void initState() {
@@ -221,7 +226,7 @@ class _MainChatScreenState extends State<MainChatScreen>
     // 1. Show the save confirmation SnackBar.
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('Video guardado en Movies/Aitana-Videos'),
+        content: Text('Video saved in Movies/Aitana-Videos'),
         backgroundColor: Colors.green,
       ),
     );
@@ -357,6 +362,12 @@ class _MainChatScreenState extends State<MainChatScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (context) {
+        // Read persona category once for the lifetime of this bottom sheet.
+        final activeCategory = ObjectBoxService.instance.personaManager
+            .getActivePersona()
+            .category;
+        final isLegalMode = activeCategory == 'LEGAL';
+
         return SafeArea(
           child: ValueListenableBuilder<AiModelInfo>(
             valueListenable: LocalLlmService.currentModel,
@@ -376,34 +387,79 @@ class _MainChatScreenState extends State<MainChatScreen>
                       ),
                     ),
                   ),
+                  if (isLegalMode)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 4,
+                      ),
+                      child: Row(
+                        children: [
+                          const Icon(
+                            Icons.lock_outline,
+                            color: Color(0xFFFFD700),
+                            size: 14,
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            'Legal Mode: model locked for factual accuracy.',
+                            style: TextStyle(
+                              color: Colors.white.withAlpha(153),
+                              fontFamily: 'Outfit',
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ...AiModelCatalog.models.map((model) {
                     final isSelected = currentModel.baseName == model.baseName;
-                    return ListTile(
-                      leading: Icon(
-                        isSelected ? Icons.psychology : Icons.psychology_alt,
-                        color: isSelected
-                            ? AppColors.cyberBlue
-                            : Colors.white70,
-                      ),
-                      title: Text(
-                        model.displayName,
-                        style: TextStyle(
-                          color: isSelected ? Colors.white : Colors.white70,
-                          fontWeight: isSelected
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                          fontFamily: 'Outfit',
+                    // In Legal Mode, only the variant model is selectable.
+                    final isDisabled =
+                        isLegalMode && model.baseName == 'gemma_4b';
+
+                    return Opacity(
+                      opacity: isDisabled ? 0.4 : 1.0,
+                      child: ListTile(
+                        leading: Icon(
+                          isSelected ? Icons.psychology : Icons.psychology_alt,
+                          color: isSelected
+                              ? AppColors.cyberBlue
+                              : Colors.white70,
                         ),
+                        title: Text(
+                          model.displayName,
+                          style: TextStyle(
+                            color: isSelected ? Colors.white : Colors.white70,
+                            fontWeight: isSelected
+                                ? FontWeight.bold
+                                : FontWeight.normal,
+                            fontFamily: 'Outfit',
+                          ),
+                        ),
+                        subtitle: isDisabled
+                            ? const Text(
+                                'Disabled in Legal Mode for factual accuracy.',
+                                style: TextStyle(
+                                  color: Colors.white38,
+                                  fontFamily: 'Outfit',
+                                  fontSize: 11,
+                                ),
+                              )
+                            : null,
+                        trailing: isSelected
+                            ? const Icon(
+                                Icons.check_circle,
+                                color: AppColors.cyberBlue,
+                              )
+                            : null,
+                        onTap: isDisabled
+                            ? null
+                            : () => _handleModelSwitch(model),
                       ),
-                      trailing: isSelected
-                          ? const Icon(
-                              Icons.check_circle,
-                              color: AppColors.cyberBlue,
-                            )
-                          : null,
-                      onTap: () => _handleModelSwitch(model),
                     );
                   }),
+                  const SizedBox(height: 8),
                 ],
               );
             },
@@ -594,6 +650,33 @@ class _MainChatScreenState extends State<MainChatScreen>
     });
 
     _scrollToBottom();
+
+    // ── Persona-Aware Inference Parameters ────────────────────────────────
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    if (activePersona.category != _lastPersonaCategory) {
+      final LlmInferenceParams params;
+      if (activePersona.category == 'LEGAL') {
+        params = const LlmInferenceParams(
+          temperature: 0.2,
+          topK: 20,
+          topP: 0.8,
+          repetitionPenalty: 1.3, // Higher penalty for formulaic legal text
+          enableThinking: false,
+        );
+      } else {
+        params = const LlmInferenceParams(
+          temperature: 0.45,
+          topK: 40,
+          topP: 0.9,
+          repetitionPenalty: 1.2,
+          enableThinking: false,
+        );
+      }
+      await LocalLlmService.updateSamplerParams(params);
+      _lastPersonaCategory = activePersona.category;
+    }
+    // ──────────────────────────────────────────────────────────────────────
 
     final response = await LocalLlmService.runInference(
       text.isEmpty ? "Describe esto" : text,
@@ -931,9 +1014,9 @@ class _MainChatScreenState extends State<MainChatScreen>
       _scrollToBottom();
 
       if (_isVoiceWakeSession) {
-        _isVoiceWakeSession = false;
-        // Por hacer: Trigger recording via VoiceInputPanel if needed.
-        // For now, we skip auto-recording to maintain stability.
+        _voiceKey.currentState?.startManualRecording();
+        _isVoiceWakeSession =
+            false; // CRITICAL: Reset the flag so it only triggers on the first turn of the wake session.
       }
     }
   }
@@ -1076,16 +1159,18 @@ class _MainChatScreenState extends State<MainChatScreen>
                           onPressed: () async {
                             Navigator.pop(context); // Cierra el Drawer
                             await _saveCurrentSessionIfNeeded(); // Guarda si había algo a medias
-                            await LocalLlmService.clearContext(); // Limpia el LLM
-                            if (mounted) {
-                              _clearMessages();
-                              setState(() {
-                                _currentSessionId = null; // ID a 0
-                                _needsSaving = false;
-                              });
-                            }
-                            LocalLlmService.activeSessionSummary = '';
-                            _refreshHistory(); // Refresca la lista
+                            await LocalLlmService.resetSessionState(
+                              onClearUi: () {
+                                if (mounted) {
+                                  _clearMessages();
+                                  setState(() {
+                                    _currentSessionId = null;
+                                    _needsSaving = false;
+                                  });
+                                  _refreshHistory();
+                                }
+                              },
+                            );
                           },
                           icon: const Icon(
                             Icons.edit_square,
@@ -1380,48 +1465,55 @@ class _MainChatScreenState extends State<MainChatScreen>
                             width: 36,
                             height: 36,
                             decoration: BoxDecoration(
-                              color: Colors.purpleAccent.withAlpha(20),
+                              color: AppColors.cyberBlue.withAlpha(20),
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: const Icon(
                               Icons.language_rounded,
-                              color: Colors.purpleAccent,
+                              color: AppColors.cyberBlue,
                               size: 20,
                             ),
                           ),
                           title: const Text(
-                            'Context Mode',
+                            'Language Override',
                             style: TextStyle(
                               color: Colors.white,
                               fontFamily: 'Outfit',
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          subtitle: Text(
-                            LocalLlmService.isEnglishDemoMode
-                                ? 'English Demo (Sarcastic)'
-                                : 'Spanish Default (Mexican)',
-                            style: const TextStyle(
-                              color: AppColors.textMedium,
-                              fontFamily: 'Outfit',
-                              fontSize: 12,
-                            ),
+                          trailing: CupertinoSlidingSegmentedControl<String>(
+                            groupValue: LocalLlmService.currentLanguage,
+                            backgroundColor: const Color(0xFF1E1F20),
+                            thumbColor: AppColors.cyberBlue.withAlpha(40),
+                            children: const {
+                              'ES': Text(
+                                ' ES ',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontFamily: 'Outfit',
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              'EN': Text(
+                                ' EN ',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontFamily: 'Outfit',
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            },
+                            onValueChanged: (String? newValue) {
+                              if (newValue != null &&
+                                  newValue != LocalLlmService.currentLanguage) {
+                                setState(() {
+                                  LocalLlmService.currentLanguage = newValue;
+                                });
+                                LocalLlmService.resetSessionState();
+                              }
+                            },
                           ),
-                          onTap: () async {
-                            LocalLlmService.isEnglishDemoMode =
-                                !LocalLlmService.isEnglishDemoMode;
-                            Navigator.pop(context);
-                            await LocalLlmService.clearContext();
-                            LocalLlmService.activeSessionSummary = '';
-                            if (mounted) {
-                              setState(() {
-                                _messages.clear();
-                                _currentSessionId = null;
-                                _needsSaving = false;
-                              });
-                            }
-                            _refreshHistory();
-                          },
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),
@@ -1456,32 +1548,44 @@ class _MainChatScreenState extends State<MainChatScreen>
           ),
           body: Column(
             children: [
-              ChatHeaderWidget(
-                onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
-                onModelSelectorPressed: _showModelSelector,
-                onClearMemoryPressed: () {
-                  LocalLlmService.clearContext();
-                  if (mounted) {
-                    _clearMessages();
-                    setState(() {
-                      _currentSessionId = null;
-                      _needsSaving = false;
-                    });
-                  }
-                  LocalLlmService.activeSessionSummary = '';
-                  _refreshHistory();
-                },
-                onExitPressed: () {
-                  if (mounted) {
-                    _handleExit();
-                  }
-                },
-                onLongPressPill: () {
-                  showModalBottomSheet(
-                    context: context,
-                    backgroundColor: Colors.transparent,
-                    isScrollControlled: true,
-                    builder: (_) => const DevToolsBottomSheet(),
+              ValueListenableBuilder<String>(
+                valueListenable: ObjectBoxService
+                    .instance
+                    .personaManager
+                    .activeCategoryNotifier,
+                builder: (context, category, child) {
+                  return ChatHeaderWidget(
+                    personaCategory: category,
+                    onMenuPressed: () =>
+                        _scaffoldKey.currentState?.openDrawer(),
+                    onModelSelectorPressed: _showModelSelector,
+                    onClearMemoryPressed: () async {
+                      await LocalLlmService.resetSessionState(
+                        onClearUi: () {
+                          if (mounted) {
+                            _clearMessages();
+                            setState(() {
+                              _currentSessionId = null;
+                              _needsSaving = false;
+                            });
+                            _refreshHistory();
+                          }
+                        },
+                      );
+                    },
+                    onExitPressed: () {
+                      if (mounted) {
+                        _handleExit();
+                      }
+                    },
+                    onLongPressPill: () {
+                      showModalBottomSheet(
+                        context: context,
+                        backgroundColor: Colors.transparent,
+                        isScrollControlled: true,
+                        builder: (_) => const DevToolsBottomSheet(),
+                      );
+                    },
                   );
                 },
               ),
@@ -1662,6 +1766,7 @@ class _MainChatScreenState extends State<MainChatScreen>
 
                     // ── Floating pill input row ─────────────────────────────
                     VoiceInputPanel(
+                      key: _voiceKey,
                       textController: _textController,
                       focusNode: _focusNode,
                       isLoading: _isLoading,

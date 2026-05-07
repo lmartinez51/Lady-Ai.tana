@@ -17,8 +17,14 @@ class LlmInferenceParams {
   final int topK;
 
   /// Nucleus sampling threshold. Only tokens whose cumulative probability
-  /// reaches [topP] are considered. Range: 0.0 → 1.0. Default: 0.85.
+  /// reaches [topP] are considered. Range: 0.0 → 1.0. Default: 0.90.
   final double topP;
+
+  /// Penalizes previously generated tokens to prevent the model from entering
+  /// a repetition loop, especially on formulaic legal text. A value of 1.0
+  /// means no penalty; values > 1.0 reduce the probability of repeated tokens.
+  /// Range: 1.0 (disabled) → 2.0 (very aggressive). Default: 1.2.
+  final double repetitionPenalty;
 
   /// When `true`, the Dart layer injects `<|think|>` at the end of the
   /// system prompt, activating Gemma 4's internal reasoning channel.
@@ -29,6 +35,7 @@ class LlmInferenceParams {
     this.temperature = 0.45,
     this.topK = 40,
     this.topP = 0.90,
+    this.repetitionPenalty = 1.2,
     this.enableThinking = false,
   });
 
@@ -46,6 +53,7 @@ class LlmInferenceParams {
     'temperature': temperature,
     'top_k': topK,
     'top_p': topP,
+    'repetition_penalty': repetitionPenalty,
     // enable_thinking is included for logging/debugging on the Kotlin side,
     // but the native handler intentionally ignores it.
     'enable_thinking': enableThinking,
@@ -54,5 +62,5 @@ class LlmInferenceParams {
   @override
   String toString() =>
       'LlmInferenceParams(temp=$temperature, topK=$topK, topP=$topP, '
-      'thinking=$enableThinking)';
+      'repPenalty=$repetitionPenalty, thinking=$enableThinking)';
 }

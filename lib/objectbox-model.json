@@ -44,7 +44,7 @@
     },
     {
       "id": "3:1884956132443171885",
-      "lastPropertyId": "6:7092151286479245659",
+      "lastPropertyId": "7:4466340117118187107",
       "name": "GeofenceRecord",
       "properties": [
         {
@@ -77,13 +77,162 @@
           "id": "6:7092151286479245659",
           "name": "triggeredAt",
           "type": 10
+        },
+        {
+          "id": "7:4466340117118187107",
+          "name": "validSsids",
+          "type": 30
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "4:4202592172897918215",
+      "lastPropertyId": "9:4074503938768558934",
+      "name": "PersonaRecord",
+      "properties": [
+        {
+          "id": "1:8224663925792098882",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:864822024806057762",
+          "name": "name",
+          "type": 9
+        },
+        {
+          "id": "4:7274788355029872125",
+          "name": "isActive",
+          "type": 1
+        },
+        {
+          "id": "6:3867443042063554608",
+          "name": "category",
+          "type": 9
+        },
+        {
+          "id": "7:7007513853071994607",
+          "name": "promptEs",
+          "type": 9
+        },
+        {
+          "id": "8:6470600300167286465",
+          "name": "promptEn",
+          "type": 9
+        },
+        {
+          "id": "9:4074503938768558934",
+          "name": "defaultLang",
+          "type": 9
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "5:8310334134004658179",
+      "lastPropertyId": "8:5635628095577414895",
+      "name": "LegalKnowledgeChunk",
+      "properties": [
+        {
+          "id": "1:7925842440799757423",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:5416157175985453592",
+          "name": "documentName",
+          "type": 9
+        },
+        {
+          "id": "3:8839600152883580829",
+          "name": "chapterContext",
+          "type": 9
+        },
+        {
+          "id": "4:2103082737694295831",
+          "name": "sectionContext",
+          "type": 9
+        },
+        {
+          "id": "5:6283477565950664057",
+          "name": "rawText",
+          "type": 9
+        },
+        {
+          "id": "6:773883312216935507",
+          "name": "searchableText",
+          "indexId": "1:7655149427160378126",
+          "type": 9,
+          "flags": 8
+        },
+        {
+          "id": "7:6178181959745896744",
+          "name": "documentId",
+          "indexId": "3:494954052907302959",
+          "type": 11,
+          "flags": 520,
+          "relationTarget": "LegalDocumentRecord"
+        },
+        {
+          "id": "8:5635628095577414895",
+          "name": "authorityWeight",
+          "type": 6
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "6:7890443548151950447",
+      "lastPropertyId": "7:8657819355487173635",
+      "name": "LegalDocumentRecord",
+      "properties": [
+        {
+          "id": "1:5172749287308473593",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:4333654132331178412",
+          "name": "title",
+          "type": 9
+        },
+        {
+          "id": "3:2037682073892423712",
+          "name": "authorOrSource",
+          "type": 9
+        },
+        {
+          "id": "4:8195808753843340152",
+          "name": "uploadDate",
+          "type": 10
+        },
+        {
+          "id": "5:418556515491748462",
+          "name": "chunkCount",
+          "type": 6
+        },
+        {
+          "id": "6:1347663133206071346",
+          "name": "fileName",
+          "indexId": "2:8098151667519924248",
+          "type": 9,
+          "flags": 8
+        },
+        {
+          "id": "7:8657819355487173635",
+          "name": "category",
+          "type": 9
         }
       ],
       "relations": []
     }
   ],
-  "lastEntityId": "3:1884956132443171885",
-  "lastIndexId": "0:0",
+  "lastEntityId": "6:7890443548151950447",
+  "lastIndexId": "3:494954052907302959",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",
   "modelVersion": 5,
@@ -100,7 +249,9 @@
     7351883723685809657,
     4021619386010667007,
     8618388945897920214,
-    5986985217120189751
+    5986985217120189751,
+    9025568968839982141,
+    7069192966358520109
   ],
   "retiredRelationUids": [],
   "version": 1

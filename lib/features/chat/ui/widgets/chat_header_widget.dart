@@ -14,6 +14,7 @@ class ChatHeaderWidget extends StatelessWidget {
   final VoidCallback onClearMemoryPressed;
   final VoidCallback onExitPressed;
   final VoidCallback onLongPressPill;
+  final String personaCategory;
 
   const ChatHeaderWidget({
     super.key,
@@ -22,10 +23,25 @@ class ChatHeaderWidget extends StatelessWidget {
     required this.onClearMemoryPressed,
     required this.onExitPressed,
     required this.onLongPressPill,
+    required this.personaCategory,
   });
+
+  Color _getPersonaColor() {
+    switch (personaCategory) {
+      case 'AI':
+        return const Color(0xFFFFFFFF); // Cyberpunk Purple
+      case 'HUMAN':
+        return const Color(0xFF03DAC6); // Matrix Teal
+      case 'LEGAL':
+        return const Color(0xFFFFD700); // Prestige Gold
+      default:
+        return Colors.white;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final personaColor = _getPersonaColor();
     return SafeArea(
       bottom: false,
       child: Padding(
@@ -59,7 +75,7 @@ class ChatHeaderWidget extends StatelessWidget {
                       border: Border.all(
                         color: isRecordingVideo
                             ? Colors.redAccent.withAlpha(120)
-                            : AppColors.glassBorder,
+                            : personaColor.withAlpha(150),
                         width: isRecordingVideo ? 1.5 : 1.0,
                       ),
                       boxShadow: isRecordingVideo
@@ -77,9 +93,9 @@ class ChatHeaderWidget extends StatelessWidget {
                             ]
                           : [
                               BoxShadow(
-                                color: Colors.black.withAlpha(60),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
+                                color: personaColor.withAlpha(51),
+                                blurRadius: 8,
+                                offset: const Offset(0, 2),
                               ),
                             ],
                     ),
@@ -92,7 +108,7 @@ class ChatHeaderWidget extends StatelessWidget {
                         child: ValueListenableBuilder<String>(
                           valueListenable: LocalLlmService.status,
                           builder: (context, status, _) {
-                            Color modelColor = Colors.white;
+                            Color modelColor = personaColor;
                             if (status == 'loading') {
                               modelColor = Colors.orangeAccent;
                             } else if (status == 'error') {
@@ -108,7 +124,7 @@ class ChatHeaderWidget extends StatelessWidget {
                                         LocalLlmService.currentModel,
                                     builder: (context, currentModel, _) {
                                       return Text(
-                                        'Lady Ai.tana (${currentModel.shortName})',
+                                        'Lady Ai.tana (${currentModel.shortName})      [${LocalLlmService.currentLanguage}]',
                                         style: TextStyle(
                                           color: modelColor,
                                           fontFamily: 'Outfit',
@@ -124,7 +140,7 @@ class ChatHeaderWidget extends StatelessWidget {
                                 if (isRecordingVideo) ...[
                                   const SizedBox(width: 6),
                                   Tooltip(
-                                    message: 'Grabando video',
+                                    message: 'Recording video',
                                     child: Icon(
                                       Icons.fiber_manual_record,
                                       size: 14,

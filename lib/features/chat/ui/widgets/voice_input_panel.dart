@@ -6,6 +6,7 @@ import 'package:record/record.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 
 class VoiceInputPanel extends StatefulWidget {
   final TextEditingController textController;
@@ -30,10 +31,10 @@ class VoiceInputPanel extends StatefulWidget {
   });
 
   @override
-  State<VoiceInputPanel> createState() => _VoiceInputPanelState();
+  State<VoiceInputPanel> createState() => VoiceInputPanelState();
 }
 
-class _VoiceInputPanelState extends State<VoiceInputPanel> {
+class VoiceInputPanelState extends State<VoiceInputPanel> {
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
   bool _hasSpoken = false;
@@ -56,6 +57,12 @@ class _VoiceInputPanelState extends State<VoiceInputPanel> {
     _silenceTimer?.cancel();
     _hardStopTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> startManualRecording() async {
+    if (!_isRecording && mounted) {
+      await _startRecording();
+    }
   }
 
   Future<void> _toggleRecording() async {
@@ -305,14 +312,17 @@ class _VoiceInputPanelState extends State<VoiceInputPanel> {
                     transitionBuilder: (child, animation) =>
                         ScaleTransition(scale: animation, child: child),
                     child: widget.isLoading
-                        ? const IconButton(
-                            key: ValueKey('stop'),
-                            icon: Icon(
-                              Icons.stop_rounded,
-                              color: Colors.white,
-                              size: 20,
+                        ? IconButton(
+                            key: const ValueKey('stop'),
+                            icon: const Icon(
+                              Icons.stop_circle_outlined,
+                              color: Colors.redAccent,
+                              size: 22,
                             ),
-                            onPressed: null,
+                            tooltip: 'Stop generation',
+                            onPressed: () {
+                              LocalLlmService.stopInference();
+                            },
                           )
                         : showSend
                         ? IconButton(

@@ -1492,7 +1492,7 @@ class MainActivity : FlutterFragmentActivity() {
             try {
                 val config = EngineConfig(
                     modelPath     = modelFile.absolutePath,
-                    backend       = Backend.GPU(),
+                    backend       = Backend.CPU(),
                     audioBackend  = Backend.CPU(),
                     visionBackend = Backend.CPU(),
                     cacheDir      = cacheDir.path
