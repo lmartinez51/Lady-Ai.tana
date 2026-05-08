@@ -53,6 +53,8 @@ import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.SamplerConfig
 import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.tool
+import com.google.ai.edge.litertlm.ExperimentalApi
+import com.google.ai.edge.litertlm.ExperimentalFlags
 
 // Camera X
 import androidx.camera.core.Preview
@@ -1482,42 +1484,38 @@ class MainActivity : FlutterFragmentActivity() {
 
     // ─── Engine & Conversation helpers ────────────────────────────────────────
 
+    @OptIn(ExperimentalApi::class)
     private suspend fun getOrInitEngine(baseName: String): Engine {
         engineMutex.withLock {
             engine?.let { return it }
 
             val modelFile = resolveModelFile(baseName)
+            val isVariant = baseName.contains("variant", ignoreCase = true)
 
-            // Intentar GPU primero
+            // 1. Conditional MTP: Only enable for the main E4B model.
+            ExperimentalFlags.enableSpeculativeDecoding = !isVariant
+
             try {
+                // Main Attempt: CPU with XNNPack (Most stable for MTP currently)
                 val config = EngineConfig(
                     modelPath     = modelFile.absolutePath,
-                    backend       = Backend.CPU(),
+                    backend       = Backend.GPU(), 
                     audioBackend  = Backend.CPU(),
                     visionBackend = Backend.CPU(),
                     cacheDir      = cacheDir.path
                 )
                 val eng = Engine(config)
-                eng.initialize()  // ← El crash ocurre aquí si GPU no está disponible
-                Log.i("LiteRT-LM", "Engine listo con GPU ✓")
+                eng.initialize()
+                
+                val mtpStatus = if (!isVariant) "ON" else "OFF"
+                Log.i("LiteRT-LM", "Engine listo con GPU ✓ (Speculative Decoding: $mtpStatus)")
+                
                 return eng.also { engine = it }
 
             } catch (e: Exception) {
-                Log.w("LiteRT-LM", "GPU no disponible, usando CPU: ${e.message}")
+                Log.e("LiteRT-LM", "Error crítico al inicializar el Engine: ${e.message}")
+                throw e // Re-throw to handle it gracefully in the UI if possible
             }
-
-            // Fallback garantizado a CPU
-            val config = EngineConfig(
-                modelPath     = modelFile.absolutePath,
-                backend       = Backend.CPU(),
-                audioBackend  = Backend.CPU(),
-                visionBackend = Backend.CPU(),
-                cacheDir      = cacheDir.path
-            )
-            val eng = Engine(config)
-            eng.initialize()
-            Log.i("LiteRT-LM", "Engine listo con CPU ✓")
-            return eng.also { engine = it }
         }
     }
 

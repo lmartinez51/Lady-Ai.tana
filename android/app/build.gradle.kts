@@ -50,7 +50,7 @@ flutter {
 dependencies {
     // LiteRT-LM (Google AI Edge): Modern on-device LLM engine.
     // Supports .litertlm format for optimized inference.
-    implementation("com.google.ai.edge.litertlm:litertlm-android:latest.release")
+    implementation("com.google.ai.edge.litertlm:litertlm-android:0.11.0")
     // Google Play Services Location (para geofencing)
     implementation("com.google.android.gms:play-services-location:21.3.0")
 

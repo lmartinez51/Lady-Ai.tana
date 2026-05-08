@@ -63,6 +63,7 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
         final chunks = DocumentChunker.processDocument(
           fileName,
           rawText,
+          categoryEnum.name,
           authorityWeight: categoryEnum.weight,
         );
 

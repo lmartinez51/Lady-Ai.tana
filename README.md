@@ -12,7 +12,8 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Hybrid Geofencing System**: Total synchronization between native Android Geofencing APIs and local ObjectBox persistence. Features a robust two-way handshake, background event processing, idempotency guards, and **Reboot Survival** (automatic restoration of OS geofences on device startup) plus **Auto-Wake** logic for background surveillance.
 - **OOM Blocking Architecture ("The Armor")**: A state-of-the-art UI blocking mechanism that prevents Out of Memory (OOM) crashes by freezing interactions and displaying system lock overlays during high-RAM LLM operations.
 - **Persistent Foreground Services**: Implements a robust background task lifecycle using `flutter_foreground_task` to maintain surveillance capabilities and system-level monitoring even when the app is in the background.
-- **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and semantic chunking. Uses a hierarchical authority model to inject legal context directly into LLM prompts without cloud dependency.
+- **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and **Strategy-based Semantic Chunking**. Uses a hierarchical authority model and specialized parsers for different legal document types (Laws, Jurisprudence, etc.) to inject context directly into LLM prompts.
+- **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for Gemini 3 Flash models, significantly reducing latency on supported hardware while maintaining precision.
 - **Persona Vault Architecture**: A sophisticated persona management system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
 
@@ -65,7 +66,8 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Secure Tool Gating**: Uses an `IntentInterceptor` to identify user requests for hardware or system tools and injects specific authorizations into the prompt. The `ToolParser` is dynamically armed for each turn, ensuring that the LLM cannot trigger events unless explicitly authorized by the preceding system hint.
 - **Holy Grail UI Pattern**: Chat history uses an optimized `ListView.builder` with `reverse: true`, ensuring $O(1)$ visual updates and native keyboard interaction without list cloning.
 - **Geofencing State**: Geofence metadata is managed locally via ObjectBox to ensure consistency with Android's system-level geofence triggers, surviving device reboots and app restarts.
-- **Hierarchical RAG Strategy**: Implements a weighted retrieval engine that prioritizes document authority and maintains structural integrity (articles/chapters) during the chunking process to ensure high-fidelity legal inference.
+- **Strategy-Based RAG Chunking**: Implements a `ChunkingStrategy` factory pattern that handles structural integrity (articles/chapters/rubros) differently based on the document type, ensuring high-fidelity retrieval for Mexican legal texts.
+- **Hardware-Accelerated Inference**: Leverages GPU-bound LiteRT execution with Speculative Decoding to provide a responsive, local-first AI experience on modern mobile hardware.
 
 ## Testing & Compatibility
 
