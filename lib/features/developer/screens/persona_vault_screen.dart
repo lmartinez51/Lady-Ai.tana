@@ -141,7 +141,7 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
         backgroundColor: Colors.transparent,
         elevation: 0,
         title: const Text(
-          'Persona Vault',
+          'Personalities Vault',
           style: TextStyle(
             color: Colors.white,
             fontFamily: 'Outfit',

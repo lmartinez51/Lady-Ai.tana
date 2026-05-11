@@ -9,6 +9,8 @@ import 'package:aitana/features/settings/models/persona_record.dart';
 import 'package:aitana/features/settings/services/persona_manager_service.dart';
 import 'package:aitana/features/rag/models/legal_knowledge_chunk.dart';
 import 'package:aitana/features/rag/models/legal_document_record.dart';
+import 'package:aitana/features/vault/models/personal_vault_image.dart';
+import 'package:aitana/features/vault/models/personal_vault_analysis.dart';
 
 /// Pairs a retrieved chunk with its in-memory relevance score.
 ///
@@ -37,6 +39,10 @@ class ObjectBoxService {
   late final Box<LegalDocumentRecord> legalDocumentBox;
   late final Box<LegalKnowledgeChunk> legalChunkBox;
 
+  // 🔐 PERSONAL VAULT
+  late final Box<PersonalVaultImage> vaultImageBox;
+  late final Box<PersonalVaultAnalysis> vaultAnalysisBox;
+
   /// Cached chunk count — invalidated whenever a document is saved or deleted.
   ///
   /// Avoids hitting ObjectBox on every message just to determine if the legal
@@ -63,6 +69,8 @@ class ObjectBoxService {
     personaManager.seedInitialPersonas();
     legalDocumentBox = Box<LegalDocumentRecord>(_store);
     legalChunkBox = Box<LegalKnowledgeChunk>(_store);
+    vaultImageBox = Box<PersonalVaultImage>(_store);
+    vaultAnalysisBox = Box<PersonalVaultAnalysis>(_store);
   }
 
   /// Create an instance of ObjectBoxService to use throughout the app.
@@ -224,36 +232,107 @@ class ObjectBoxService {
     return (_cachedChunkCount ?? 0) > 0;
   }
 
-  /// Ruthless Nuke: Clears ObjectBox collections and purges physical PDF files to prevent "zombies".
-  Future<void> nukeDatabase() async {
-    final docs = legalDocumentBox.getAll();
+  /// Deletes a single item from the Personal Vault.
+  ///
+  /// This is a destructive operation that removes the physical file from
+  /// the device storage before purging the ObjectBox records to prevent
+  /// "orphan" binary files in the application sandbox.
+  Future<void> deleteVaultItem(int id) async {
+    final image = vaultImageBox.get(id);
+    if (image == null) return;
 
+    // 1. Delete the physical file from local storage
+    try {
+      final file = File(image.fileUri);
+      if (await file.exists()) {
+        await file.delete();
+        debugPrint('🗑️ [Vault] Physical file deleted: ${image.fileUri}');
+      }
+    } catch (e) {
+      debugPrint('🔴 [Vault] Error deleting physical file: $e');
+    }
+
+    // 2. Clear database records (transactional)
+    _store.runInTransaction(TxMode.write, () {
+      // Note: In ObjectBox Dart, ToMany relations don't auto-cascade on remove.
+      // We must manually remove the associated analysis records.
+      final analysisIds = image.analysisChunks.map((a) => a.id).toList();
+      vaultAnalysisBox.removeMany(analysisIds);
+      vaultImageBox.remove(id);
+    });
+
+    debugPrint('✅ [Vault] Database record deleted: ID $id');
+  }
+
+  /// Ruthless Nuke: Clears ALL ObjectBox collections and purges physical files
+  /// (PDFs and Vault Images) to prevent "zombies" and data leakage.
+  Future<void> nukeDatabase() async {
+    debugPrint('☢️ [ObjectBox] INITIATING GLOBAL NUKE...');
+
+    await nukeLegalLibrary();
+    await nukeChatHistory();
+    await nukePersonalVault();
+
+    // Final purge of remaining metadata
     _store.runInTransaction(TxMode.write, () {
       personaBox.removeAll();
-      legalDocumentBox.removeAll();
-      legalChunkBox.removeAll();
     });
-    _cachedChunkCount = 0;
 
+    debugPrint('✅ [ObjectBox] System factory reset complete.');
+  }
+
+  /// Granular Nuke: Purges the Legal Library and its physical source files.
+  Future<void> nukeLegalLibrary() async {
+    final docs = legalDocumentBox.getAll();
     try {
       final appDir = await getApplicationDocumentsDirectory();
-
-      // 1. Wipe the designated legal documents folder if it exists
       final legalDir = Directory(p.join(appDir.path, 'legal_docs'));
       if (await legalDir.exists()) {
         await legalDir.delete(recursive: true);
       }
-
-      // 2. Iterate and destroy any zombie PDF files directly in the root directory
       for (final doc in docs) {
         final file = File(p.join(appDir.path, doc.fileName));
-        if (await file.exists()) {
-          await file.delete();
-        }
+        if (await file.exists()) await file.delete();
       }
+      debugPrint('🧹 [ObjectBox] Legal physical files purged.');
     } catch (e) {
-      debugPrint('Error purging physical zombie documents: $e');
+      debugPrint('🔴 [ObjectBox] Legal Nuke IO Error: $e');
     }
+
+    _store.runInTransaction(TxMode.write, () {
+      legalDocumentBox.removeAll();
+      legalChunkBox.removeAll();
+    });
+    _cachedChunkCount = 0;
+    debugPrint('✅ [ObjectBox] Legal Library records wiped.');
+  }
+
+  /// Granular Nuke: Clears the entire chat history across all sessions.
+  Future<void> nukeChatHistory() async {
+    _store.runInTransaction(TxMode.write, () {
+      sessionBox.removeAll();
+    });
+    debugPrint('✅ [ObjectBox] Chat history wiped.');
+  }
+
+  /// Granular Nuke: Purges the Personal Vault and its physical sandbox images.
+  Future<void> nukePersonalVault() async {
+    final vaultImages = vaultImageBox.getAll();
+    try {
+      for (final img in vaultImages) {
+        final file = File(img.fileUri);
+        if (await file.exists()) await file.delete();
+      }
+      debugPrint('🧹 [ObjectBox] Vault physical files purged.');
+    } catch (e) {
+      debugPrint('🔴 [ObjectBox] Vault Nuke IO Error: $e');
+    }
+
+    _store.runInTransaction(TxMode.write, () {
+      vaultImageBox.removeAll();
+      vaultAnalysisBox.removeAll();
+    });
+    debugPrint('✅ [ObjectBox] Personal Vault records wiped.');
   }
 
   Future<void> insertLegalChunks(List<LegalKnowledgeChunk> chunks) async {
@@ -287,10 +366,37 @@ class ObjectBoxService {
 
     // ── Step 2: Unique keyword set & Stop Words filter ──
     final stopWords = {
-      'el', 'la', 'los', 'las', 'un', 'una', 'unos', 'unas', 'de', 'del',
-      'a', 'ante', 'con', 'para', 'por', 'segun', 'sin', 'sobre', 'en', 'y', 'o',
-      'que', 'dame', 'resumen', 'muestrame', 'ley', 'amparo', 'codigo', 'civil',
-      'penal', 'constitucion'
+      'el',
+      'la',
+      'los',
+      'las',
+      'un',
+      'una',
+      'unos',
+      'unas',
+      'de',
+      'del',
+      'a',
+      'ante',
+      'con',
+      'para',
+      'por',
+      'segun',
+      'sin',
+      'sobre',
+      'en',
+      'y',
+      'o',
+      'que',
+      'dame',
+      'resumen',
+      'muestrame',
+      'ley',
+      'amparo',
+      'codigo',
+      'civil',
+      'penal',
+      'constitucion',
     };
 
     final keywords = normalized

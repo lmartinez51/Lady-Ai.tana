@@ -51,6 +51,14 @@ dependencies {
     // LiteRT-LM (Google AI Edge): Modern on-device LLM engine.
     // Supports .litertlm format for optimized inference.
     implementation("com.google.ai.edge.litertlm:litertlm-android:0.11.0")
+
+    // 🧠 Pilar 2: Vector Embedding Support (LiteRT/TFLite)
+    implementation("com.google.ai.edge.litert:litert:1.0.1")
+    implementation("org.tensorflow:tensorflow-lite-support:0.4.4") {
+        exclude(group = "org.tensorflow", module = "tensorflow-lite")
+        exclude(group = "org.tensorflow", module = "tensorflow-lite-api")
+    }
+
     // Google Play Services Location (para geofencing)
     implementation("com.google.android.gms:play-services-location:21.3.0")
 

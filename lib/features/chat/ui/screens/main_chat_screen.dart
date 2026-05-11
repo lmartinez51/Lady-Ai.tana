@@ -25,6 +25,8 @@ import 'package:aitana/features/chat/ui/widgets/voice_input_panel.dart';
 import 'package:aitana/core/theme/widgets/system_lock_overlay.dart';
 import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
+import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
+import 'package:aitana/features/vault/tools/vault_search_tool.dart';
 
 class MainChatScreen extends StatefulWidget {
   const MainChatScreen({super.key});
@@ -636,6 +638,76 @@ class _MainChatScreenState extends State<MainChatScreen>
 
     if ((text.isEmpty && imagePath == null) || _isLoading) return;
 
+    // ─── Phase 3: Personal Vault Interceptor ──────────────────────────────
+    final isVaultCommand = RegExp(
+      r'^analiza\b',
+      caseSensitive: false,
+    ).hasMatch(text);
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+
+    // debugPrint('--- VAULT INTERCEPTOR DEBUG ---');
+    // debugPrint(
+    //   '1. Regex Match (^analiza): ${RegExp(r'^analiza\b', caseSensitive: false).hasMatch(text)}',
+    // );
+    // debugPrint('2. Has Image: ${imagePath != null}');
+    // debugPrint('3. Active Persona Name: ${activePersona.name}');
+    // debugPrint('-------------------------------');
+
+    if (isVaultCommand && imagePath != null && activePersona.name == 'Aitana') {
+      // 1. Add user message to UI
+      _addMessage(ChatMessage(text: text, isUser: true, imagePath: imagePath));
+
+      // 2. Clear input state immediately
+      if (autoText == null) {
+        _textController.clear();
+        _selectedImagePath = null;
+        _focusNode.unfocus();
+      }
+
+      // 3. Add temporary system feedback
+      _addMessage(
+        ChatMessage(
+          text: "Iniciando análisis multimodal para la bóveda...",
+          isUser: false,
+        ),
+      );
+
+      setState(() {
+        _isLoading = true;
+      });
+      _scrollToBottom();
+
+      // 4. Execute the Vault Ingestion pipeline (Deduplication -> Sandbox -> Vision -> Save)
+      final result = await VaultIngestionService().ingestImage(imagePath);
+
+      // 5. Finalize UI state with status
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          final isSpanish = LocalLlmService.currentLanguage == 'ES';
+          String statusMsg;
+          if (result == IngestionStatus.success) {
+            statusMsg = isSpanish
+                ? "✅ Análisis completado y guardado en la Bóveda"
+                : "✅ Analysis completed and saved in the Vault";
+          } else if (result == IngestionStatus.duplicate) {
+            statusMsg = isSpanish
+                ? "ℹ️ Esta imagen ya está en tu Bóveda Personal"
+                : "ℹ️ This image is already in your Personal Vault";
+          } else {
+            statusMsg = isSpanish
+                ? "❌ Error: No se pudo completar el análisis de la imagen"
+                : "❌ Error: Could not complete image analysis";
+          }
+          _messages.last.text = statusMsg;
+          _notifyMessagesChanged();
+        });
+      }
+      return; // Exit early to bypass standard inference
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
     if (autoText == null) {
       _textController.clear();
       _selectedImagePath = null;
@@ -652,8 +724,6 @@ class _MainChatScreenState extends State<MainChatScreen>
     _scrollToBottom();
 
     // ── Persona-Aware Inference Parameters ────────────────────────────────
-    final activePersona = ObjectBoxService.instance.personaManager
-        .getActivePersona();
     if (activePersona.category != _lastPersonaCategory) {
       final LlmInferenceParams params;
       if (activePersona.category == 'LEGAL') {
@@ -678,14 +748,32 @@ class _MainChatScreenState extends State<MainChatScreen>
     }
     // ──────────────────────────────────────────────────────────────────────
 
+    String? pendingVaultResults;
+
     final response = await LocalLlmService.runInference(
       text.isEmpty ? "Describe esto" : text,
       imagePath: imagePath,
       onTokenUpdate: _handleTokenUpdate,
       onCommandDetected: _handleDeviceCommand,
+      onVaultSearchDetected: (query) async {
+        // We capture the results but DO NOT trigger _sendMessage yet.
+        // Triggering it now would fail because the LLM engine is still busy
+        // and the _isLoading flag might block the new turn.
+        pendingVaultResults = await VaultSearchTool.searchVault(query);
+      },
     );
 
     _finalizeResponse(response);
+
+    // If a vault search was requested during the stream, trigger the second turn
+    // now that the engine is free and the UI is finalized.
+    if (pendingVaultResults != null && mounted) {
+      _sendMessage(
+        autoText:
+            "[VAULT CONTEXT RETRIEVED: $pendingVaultResults]\n"
+            "Responde a Lorenzo usando esta información específica.",
+      );
+    }
   }
 
   /// Handles token updates during inference.
@@ -727,7 +815,7 @@ class _MainChatScreenState extends State<MainChatScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Grabando video — preview flotante activo'),
+              content: Text('Recording... video floating preview active'),
               backgroundColor: Colors.green,
             ),
           );
@@ -741,7 +829,7 @@ class _MainChatScreenState extends State<MainChatScreen>
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Video guardado en Movies/Aitana-Videos'),
+              content: Text('Video saved to Gallery/Aitana-Videos'),
               backgroundColor: Colors.green,
             ),
           );
@@ -772,8 +860,8 @@ class _MainChatScreenState extends State<MainChatScreen>
     // BYPASS DEL LLM: Si estamos saliendo, no perdemos 40 segundos generando resumen
     if (isFastSave) {
       final now = DateTime.now();
-      generatedTitle = "Charla del ${now.day}/${now.month}";
-      finalSummary = "Conversación guardada automáticamente al salir.";
+      generatedTitle = "Chat on ${now.day}/${now.month}";
+      finalSummary = "Conversation saved automatically when exiting.";
     } else {
       // Flujo normal (Lento): Mandamos a la IA a hacer el resumen
       final rawConversation = _messages
@@ -781,7 +869,7 @@ class _MainChatScreenState extends State<MainChatScreen>
             final role = m.isUser ? "Lorenzo" : "Aitana";
             final content = m.text.trim().isNotEmpty
                 ? m.text
-                : "[Mensaje de Voz/Imagen]";
+                : "[Voice/Image Message]";
             return "$role: $content";
           })
           .join('\n');

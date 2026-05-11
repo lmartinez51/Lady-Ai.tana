@@ -84,7 +84,7 @@ class ChatBubbleWidget extends StatelessWidget {
               radius: 12,
               backgroundColor: AppColors.cyberBlue.withAlpha(50),
               child: const Text(
-                'A',
+                'AI',
                 style: TextStyle(
                   fontSize: 12,
                   color: AppColors.textMedium,
@@ -144,6 +144,36 @@ class ChatBubbleWidget extends StatelessWidget {
                       isUser: message.isUser,
                     ),
                     if (message.text.isNotEmpty) const SizedBox(height: 8),
+                  ],
+                  // ─── VAULT IMAGE RENDERING ───
+                  if (!message.isUser &&
+                      message.text.contains('Source URI: ')) ...[
+                    Builder(
+                      builder: (context) {
+                        final regex = RegExp(r'Source URI: ([^\s\n]+)');
+                        final match = regex.firstMatch(message.text);
+                        if (match != null) {
+                          final path = match.group(1)!;
+                          if (File(path).existsSync()) {
+                            return Padding(
+                              padding: const EdgeInsets.symmetric(
+                                vertical: 8.0,
+                              ),
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(
+                                  File(path),
+                                  width: double.infinity,
+                                  height: 150,
+                                  fit: BoxFit.cover,
+                                ),
+                              ),
+                            );
+                          }
+                        }
+                        return const SizedBox.shrink();
+                      },
+                    ),
                   ],
                   if (message.text.isNotEmpty)
                     Text(

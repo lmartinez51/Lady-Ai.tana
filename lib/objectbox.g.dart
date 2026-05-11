@@ -19,6 +19,8 @@ import 'core/domain/entities/geofence_record.dart';
 import 'features/rag/models/legal_document_record.dart';
 import 'features/rag/models/legal_knowledge_chunk.dart';
 import 'features/settings/models/persona_record.dart';
+import 'features/vault/models/personal_vault_analysis.dart';
+import 'features/vault/models/personal_vault_image.dart';
 
 export 'package:objectbox/objectbox.dart'; // so that callers only have to import this file
 
@@ -294,6 +296,135 @@ final _entities = <obx_int.ModelEntity>[
       ),
     ],
   ),
+  obx_int.ModelEntity(
+    id: const obx_int.IdUid(7, 8684345926957898045),
+    name: 'PersonalVaultAnalysis',
+    lastPropertyId: const obx_int.IdUid(11, 386805361092346852),
+    flags: 0,
+    properties: <obx_int.ModelProperty>[
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(1, 2697903059780372048),
+        name: 'id',
+        type: 6,
+        flags: 1,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(2, 7936327158823458642),
+        name: 'rawJson',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(3, 6701843696809177380),
+        name: 'imageDescription',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(4, 3499448950010795123),
+        name: 'objects',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(5, 1623721505303507953),
+        name: 'environment',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(6, 4996683588111451291),
+        name: 'textContent',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(7, 280918691833740703),
+        name: 'searchableText',
+        type: 9,
+        flags: 8,
+        indexId: const obx_int.IdUid(4, 2484136543184995830),
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(8, 921510086979096108),
+        name: 'parentImageId',
+        type: 11,
+        flags: 520,
+        indexId: const obx_int.IdUid(5, 4774485378318529781),
+        relationField: 'parentImage',
+        relationTarget: 'PersonalVaultImage',
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(9, 5048888299058361431),
+        name: 'metadataVector',
+        type: 28,
+        flags: 8,
+        indexId: const obx_int.IdUid(7, 2115479746508382420),
+        hnswParams: obx_int.ModelHnswParams(dimensions: 384),
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(10, 9018899898178591483),
+        name: 'categoryEmoji',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(11, 386805361092346852),
+        name: 'categoryKeyword',
+        type: 9,
+        flags: 0,
+      ),
+    ],
+    relations: <obx_int.ModelRelation>[],
+    backlinks: <obx_int.ModelBacklink>[],
+  ),
+  obx_int.ModelEntity(
+    id: const obx_int.IdUid(8, 6851452566629768340),
+    name: 'PersonalVaultImage',
+    lastPropertyId: const obx_int.IdUid(5, 6001133599803763039),
+    flags: 0,
+    properties: <obx_int.ModelProperty>[
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(1, 3511292248785500775),
+        name: 'id',
+        type: 6,
+        flags: 1,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(2, 4687410857660375977),
+        name: 'fileUri',
+        type: 9,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(3, 3284583540497263695),
+        name: 'imageHash',
+        type: 9,
+        flags: 2048,
+        indexId: const obx_int.IdUid(6, 5531454339643132004),
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(4, 7770999657537679913),
+        name: 'uploadDate',
+        type: 10,
+        flags: 0,
+      ),
+      obx_int.ModelProperty(
+        id: const obx_int.IdUid(5, 6001133599803763039),
+        name: 'shelf',
+        type: 9,
+        flags: 0,
+      ),
+    ],
+    relations: <obx_int.ModelRelation>[],
+    backlinks: <obx_int.ModelBacklink>[
+      obx_int.ModelBacklink(
+        name: 'analysisChunks',
+        srcEntity: 'PersonalVaultAnalysis',
+        srcField: 'parentImage',
+      ),
+    ],
+  ),
 ];
 
 /// Shortcut for [obx.Store.new] that passes [getObjectBoxModel] and for Flutter
@@ -339,8 +470,8 @@ obx_int.ModelDefinition getObjectBoxModel() {
     // Typically, this is done with `dart run build_runner build`.
     generatorVersion: obx_int.GeneratorVersion.v2025_12_16,
     entities: _entities,
-    lastEntityId: const obx_int.IdUid(6, 7890443548151950447),
-    lastIndexId: const obx_int.IdUid(3, 494954052907302959),
+    lastEntityId: const obx_int.IdUid(8, 6851452566629768340),
+    lastIndexId: const obx_int.IdUid(7, 2115479746508382420),
     lastRelationId: const obx_int.IdUid(0, 0),
     lastSequenceId: const obx_int.IdUid(0, 0),
     retiredEntityUids: const [2748509642828762004],
@@ -720,6 +851,169 @@ obx_int.ModelDefinition getObjectBoxModel() {
         return object;
       },
     ),
+    PersonalVaultAnalysis: obx_int.EntityDefinition<PersonalVaultAnalysis>(
+      model: _entities[5],
+      toOneRelations: (PersonalVaultAnalysis object) => [object.parentImage],
+      toManyRelations: (PersonalVaultAnalysis object) => {},
+      getId: (PersonalVaultAnalysis object) => object.id,
+      setId: (PersonalVaultAnalysis object, int id) {
+        object.id = id;
+      },
+      objectToFB: (PersonalVaultAnalysis object, fb.Builder fbb) {
+        final rawJsonOffset = fbb.writeString(object.rawJson);
+        final imageDescriptionOffset = fbb.writeString(object.imageDescription);
+        final objectsOffset = fbb.writeString(object.objects);
+        final environmentOffset = fbb.writeString(object.environment);
+        final textContentOffset = fbb.writeString(object.textContent);
+        final searchableTextOffset = fbb.writeString(object.searchableText);
+        final metadataVectorOffset = object.metadataVector == null
+            ? null
+            : fbb.writeListFloat32(object.metadataVector!);
+        final categoryEmojiOffset = object.categoryEmoji == null
+            ? null
+            : fbb.writeString(object.categoryEmoji!);
+        final categoryKeywordOffset = object.categoryKeyword == null
+            ? null
+            : fbb.writeString(object.categoryKeyword!);
+        fbb.startTable(12);
+        fbb.addInt64(0, object.id);
+        fbb.addOffset(1, rawJsonOffset);
+        fbb.addOffset(2, imageDescriptionOffset);
+        fbb.addOffset(3, objectsOffset);
+        fbb.addOffset(4, environmentOffset);
+        fbb.addOffset(5, textContentOffset);
+        fbb.addOffset(6, searchableTextOffset);
+        fbb.addInt64(7, object.parentImage.targetId);
+        fbb.addOffset(8, metadataVectorOffset);
+        fbb.addOffset(9, categoryEmojiOffset);
+        fbb.addOffset(10, categoryKeywordOffset);
+        fbb.finish(fbb.endTable());
+        return object.id;
+      },
+      objectFromFB: (obx.Store store, ByteData fbData) {
+        final buffer = fb.BufferContext(fbData);
+        final rootOffset = buffer.derefObject(0);
+        final idParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          4,
+          0,
+        );
+        final rawJsonParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 6, '');
+        final imageDescriptionParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 8, '');
+        final objectsParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 10, '');
+        final environmentParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 12, '');
+        final textContentParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 14, '');
+        final searchableTextParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 16, '');
+        final metadataVectorParam = const obx_int.Float32ListReader()
+            .vTableGetNullable(buffer, rootOffset, 20);
+        final categoryEmojiParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGetNullable(buffer, rootOffset, 22);
+        final categoryKeywordParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGetNullable(buffer, rootOffset, 24);
+        final object = PersonalVaultAnalysis(
+          id: idParam,
+          rawJson: rawJsonParam,
+          imageDescription: imageDescriptionParam,
+          objects: objectsParam,
+          environment: environmentParam,
+          textContent: textContentParam,
+          searchableText: searchableTextParam,
+          metadataVector: metadataVectorParam,
+          categoryEmoji: categoryEmojiParam,
+          categoryKeyword: categoryKeywordParam,
+        );
+        object.parentImage.targetId = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          18,
+          0,
+        );
+        object.parentImage.attach(store);
+        return object;
+      },
+    ),
+    PersonalVaultImage: obx_int.EntityDefinition<PersonalVaultImage>(
+      model: _entities[6],
+      toOneRelations: (PersonalVaultImage object) => [],
+      toManyRelations: (PersonalVaultImage object) => {
+        obx_int.RelInfo<PersonalVaultAnalysis>.toOneBacklink(
+          8,
+          object.id,
+          (PersonalVaultAnalysis srcObject) => srcObject.parentImage,
+        ): object.analysisChunks,
+      },
+      getId: (PersonalVaultImage object) => object.id,
+      setId: (PersonalVaultImage object, int id) {
+        object.id = id;
+      },
+      objectToFB: (PersonalVaultImage object, fb.Builder fbb) {
+        final fileUriOffset = fbb.writeString(object.fileUri);
+        final imageHashOffset = fbb.writeString(object.imageHash);
+        final shelfOffset = fbb.writeString(object.shelf);
+        fbb.startTable(6);
+        fbb.addInt64(0, object.id);
+        fbb.addOffset(1, fileUriOffset);
+        fbb.addOffset(2, imageHashOffset);
+        fbb.addInt64(3, object.uploadDate.millisecondsSinceEpoch);
+        fbb.addOffset(4, shelfOffset);
+        fbb.finish(fbb.endTable());
+        return object.id;
+      },
+      objectFromFB: (obx.Store store, ByteData fbData) {
+        final buffer = fb.BufferContext(fbData);
+        final rootOffset = buffer.derefObject(0);
+        final idParam = const fb.Int64Reader().vTableGet(
+          buffer,
+          rootOffset,
+          4,
+          0,
+        );
+        final fileUriParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 6, '');
+        final imageHashParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 8, '');
+        final uploadDateParam = DateTime.fromMillisecondsSinceEpoch(
+          const fb.Int64Reader().vTableGet(buffer, rootOffset, 10, 0),
+        );
+        final shelfParam = const fb.StringReader(
+          asciiOptimization: true,
+        ).vTableGet(buffer, rootOffset, 12, '');
+        final object = PersonalVaultImage(
+          id: idParam,
+          fileUri: fileUriParam,
+          imageHash: imageHashParam,
+          uploadDate: uploadDateParam,
+          shelf: shelfParam,
+        );
+        obx_int.InternalToManyAccess.setRelInfo<PersonalVaultImage>(
+          object.analysisChunks,
+          store,
+          obx_int.RelInfo<PersonalVaultAnalysis>.toOneBacklink(
+            8,
+            object.id,
+            (PersonalVaultAnalysis srcObject) => srcObject.parentImage,
+          ),
+        );
+        return object;
+      },
+    ),
   };
 
   return obx_int.ModelDefinition(model, bindings);
@@ -919,5 +1213,99 @@ class LegalDocumentRecord_ {
   static final chunks =
       obx.QueryBacklinkToMany<LegalKnowledgeChunk, LegalDocumentRecord>(
         LegalKnowledgeChunk_.document,
+      );
+}
+
+/// [PersonalVaultAnalysis] entity fields to define ObjectBox queries.
+class PersonalVaultAnalysis_ {
+  /// See [PersonalVaultAnalysis.id].
+  static final id = obx.QueryIntegerProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[0],
+  );
+
+  /// See [PersonalVaultAnalysis.rawJson].
+  static final rawJson = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[1],
+  );
+
+  /// See [PersonalVaultAnalysis.imageDescription].
+  static final imageDescription =
+      obx.QueryStringProperty<PersonalVaultAnalysis>(
+        _entities[5].properties[2],
+      );
+
+  /// See [PersonalVaultAnalysis.objects].
+  static final objects = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[3],
+  );
+
+  /// See [PersonalVaultAnalysis.environment].
+  static final environment = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[4],
+  );
+
+  /// See [PersonalVaultAnalysis.textContent].
+  static final textContent = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[5],
+  );
+
+  /// See [PersonalVaultAnalysis.searchableText].
+  static final searchableText = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[6],
+  );
+
+  /// See [PersonalVaultAnalysis.parentImage].
+  static final parentImage =
+      obx.QueryRelationToOne<PersonalVaultAnalysis, PersonalVaultImage>(
+        _entities[5].properties[7],
+      );
+
+  /// See [PersonalVaultAnalysis.metadataVector].
+  static final metadataVector = obx.QueryHnswProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[8],
+  );
+
+  /// See [PersonalVaultAnalysis.categoryEmoji].
+  static final categoryEmoji = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[9],
+  );
+
+  /// See [PersonalVaultAnalysis.categoryKeyword].
+  static final categoryKeyword = obx.QueryStringProperty<PersonalVaultAnalysis>(
+    _entities[5].properties[10],
+  );
+}
+
+/// [PersonalVaultImage] entity fields to define ObjectBox queries.
+class PersonalVaultImage_ {
+  /// See [PersonalVaultImage.id].
+  static final id = obx.QueryIntegerProperty<PersonalVaultImage>(
+    _entities[6].properties[0],
+  );
+
+  /// See [PersonalVaultImage.fileUri].
+  static final fileUri = obx.QueryStringProperty<PersonalVaultImage>(
+    _entities[6].properties[1],
+  );
+
+  /// See [PersonalVaultImage.imageHash].
+  static final imageHash = obx.QueryStringProperty<PersonalVaultImage>(
+    _entities[6].properties[2],
+  );
+
+  /// See [PersonalVaultImage.uploadDate].
+  static final uploadDate = obx.QueryDateProperty<PersonalVaultImage>(
+    _entities[6].properties[3],
+  );
+
+  /// See [PersonalVaultImage.shelf].
+  static final shelf = obx.QueryStringProperty<PersonalVaultImage>(
+    _entities[6].properties[4],
+  );
+
+  /// see [PersonalVaultImage.analysisChunks]
+  static final analysisChunks =
+      obx.QueryBacklinkToMany<PersonalVaultAnalysis, PersonalVaultImage>(
+        PersonalVaultAnalysis_.parentImage,
       );
 }

@@ -3,6 +3,7 @@ package com.lmartinez.aitana.aitana
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Bundle
+import java.security.MessageDigest
 import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -55,6 +56,12 @@ import com.google.ai.edge.litertlm.Message
 import com.google.ai.edge.litertlm.tool
 import com.google.ai.edge.litertlm.ExperimentalApi
 import com.google.ai.edge.litertlm.ExperimentalFlags
+
+// LiteRT (Standard) & TFLite Support
+import org.tensorflow.lite.Interpreter
+import org.tensorflow.lite.support.common.FileUtil
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 // Camera X
 import androidx.camera.core.Preview
@@ -239,6 +246,32 @@ class MainActivity : FlutterFragmentActivity() {
      */
     @Volatile
     private var isDisposing = false
+
+    // 🧠 Pilar 2: El Cerebro Vectorial (Embeddings)
+    private var embeddingInterpreter: Interpreter? = null
+    private val embeddingMutex = Mutex()
+
+    /**
+     * Initializes or returns the cached LiteRT Interpreter for the embedding model.
+     * Dimensions: 384 (MiniLM standard).
+     */
+    private suspend fun getOrInitEmbeddingInterpreter(): Interpreter = embeddingMutex.withLock {
+        embeddingInterpreter?.let { return it }
+        
+        Log.i("MainActivity", "🧠 Loading Embedding Model: assets/models/all-MiniLM-L6-v2.tflite")
+        val modelFile = withContext(Dispatchers.IO) {
+            FileUtil.loadMappedFile(this@MainActivity, "models/all-MiniLM-L6-v2.tflite")
+        }
+        
+        val options = Interpreter.Options().apply {
+            setNumThreads(4)
+            // Note: We use CPU for embeddings to avoid GPU context switching with the LLM.
+        }
+        
+        val interpreter = Interpreter(modelFile, options)
+        embeddingInterpreter = interpreter
+        return interpreter
+    }
 
     companion object {
         private const val AICORE_CHANNEL         = "com.lmartinez.aitana/aicore"
@@ -799,6 +832,64 @@ class MainActivity : FlutterFragmentActivity() {
                         isWokenByNexus = false
                     }
 
+                    // ── Generate Vector Embedding (Pilar 2) ───────────────────
+                    "generateEmbedding" -> {
+                        val text = call.argument<String>("text")
+                            ?: return@setMethodCallHandler result.error("MISSING_TEXT", "Text is required", null)
+                        
+                        lifecycleScope.launch(Dispatchers.Default) {
+                            try {
+                                val interpreter = getOrInitEmbeddingInterpreter()
+                                
+                                // Prepare Inputs (Sequence Length: 128)
+                                val maxLength = 128
+                                val inputIds = IntArray(maxLength)
+                                val attentionMask = IntArray(maxLength)
+
+                                // Simple ASCII Tokenizer (Fallback if no full WordPiece is present)
+                                val cleanText = text.lowercase()
+                                val words = cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                                
+                                inputIds[0] = 101 // [CLS]
+                                attentionMask[0] = 1
+                                
+                                var currentIdx = 1
+                                for (word in words) {
+                                    if (currentIdx >= maxLength - 1) break
+                                    // Dummy mapping: In production, load vocab.txt for WordPiece
+                                    inputIds[currentIdx] = (word.hashCode() and 0x7FFFFFFF) % 30000
+                                    attentionMask[currentIdx] = 1
+                                    currentIdx++
+                                }
+                                inputIds[currentIdx] = 102 // [SEP]
+                                attentionMask[currentIdx] = 1
+
+                                // Run Inference
+                                // This specific model expects 2 inputs (ids, mask).
+                                val inputs = arrayOf(
+                                    arrayOf(inputIds),
+                                    arrayOf(attentionMask)
+                                )
+                                
+                                val output = Array(1) { FloatArray(384) }
+                                val outputs = mutableMapOf<Int, Any>(0 to output)
+                                
+                                interpreter.runForMultipleInputsOutputs(inputs, outputs)
+                                
+                                val finalVector = output[0]
+
+                                withContext(Dispatchers.Main) {
+                                    result.success(finalVector.toList())
+                                }
+                            } catch (e: Exception) {
+                                Log.e("MainActivity", "❌ Embedding Error: ${e.message}", e)
+                                withContext(Dispatchers.Main) {
+                                    result.error("EMBEDDING_ERROR", e.message, null)
+                                }
+                            }
+                        }
+                    }
+
                     // ── Video Recording ───────────────────────────────────────
                     "startVideoRecording" -> {
                         requestCameraPermissions(result)
@@ -870,6 +961,35 @@ class MainActivity : FlutterFragmentActivity() {
 
                     // ── Audio inference (audio + text) ────────────────────────
                     "sendMessageWithAudio" -> handleSendMessageWithAudio(call, result)
+
+                    // ── Personal Vault Phase 1 ──────────────────────────────
+                    "initVaultSandbox" -> {
+                        val sandbox = File(filesDir, "vault/analyzed_images")
+                        if (!sandbox.exists()) {
+                            sandbox.mkdirs()
+                        }
+                        result.success(sandbox.absolutePath)
+                    }
+
+                    "calculateSHA256" -> {
+                        val filePath = call.argument<String>("filePath")
+                        if (filePath == null) {
+                            result.error("MISSING_ARG", "filePath is required", null)
+                        } else {
+                            lifecycleScope.launch(Dispatchers.IO) {
+                                try {
+                                    val hash = calculateSHA256(filePath)
+                                    withContext(Dispatchers.Main) {
+                                        result.success(hash)
+                                    }
+                                } catch (e: Exception) {
+                                    withContext(Dispatchers.Main) {
+                                        result.error("HASH_ERROR", e.message, null)
+                                    }
+                                }
+                            }
+                        }
+                    }
 
                     else -> result.notImplemented()
                 }
@@ -1499,7 +1619,7 @@ class MainActivity : FlutterFragmentActivity() {
                 // Main Attempt: CPU with XNNPack (Most stable for MTP currently)
                 val config = EngineConfig(
                     modelPath     = modelFile.absolutePath,
-                    backend       = Backend.GPU(), 
+                    backend       = Backend.CPU(),
                     audioBackend  = Backend.CPU(),
                     visionBackend = Backend.CPU(),
                     cacheDir      = cacheDir.path
@@ -1508,7 +1628,7 @@ class MainActivity : FlutterFragmentActivity() {
                 eng.initialize()
                 
                 val mtpStatus = if (!isVariant) "ON" else "OFF"
-                Log.i("LiteRT-LM", "Engine listo con GPU ✓ (Speculative Decoding: $mtpStatus)")
+                Log.i("LiteRT-LM", "Engine listo con CPU ✓ (Speculative Decoding: $mtpStatus)")
                 
                 return eng.also { engine = it }
 
@@ -1535,7 +1655,7 @@ class MainActivity : FlutterFragmentActivity() {
             val config = ConversationConfig(
                 systemInstruction = Contents.of(systemInstructionText),
                 samplerConfig     = samplerConfig,
-                tools             = listOf(tool(CalendarControls(methodChannel)))
+                tools             = listOf(tool(CalendarControls(methodChannel)), tool(VaultControls(methodChannel)))
             )
 
             Log.i(
@@ -1616,5 +1736,23 @@ class MainActivity : FlutterFragmentActivity() {
         shellFile.delete()
         Log.i("LiteRT-LM", "Model ownership transfer complete ✓")
         return ownedFile
+    }
+
+    /**
+     * Calculates a SHA-256 hash of a file for deduplication in the Personal Vault.
+     * Uses a buffer to handle large files efficiently on the IO thread.
+     */
+    private fun calculateSHA256(filePath: String): String {
+        val file = File(filePath)
+        val digest = MessageDigest.getInstance("SHA-256")
+        file.inputStream().use { input ->
+            val buffer = ByteArray(8192)
+            var bytesRead = input.read(buffer)
+            while (bytesRead != -1) {
+                digest.update(buffer, 0, bytesRead)
+                bytesRead = input.read(buffer)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 }

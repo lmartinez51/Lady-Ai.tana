@@ -14,7 +14,8 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Persistent Foreground Services**: Implements a robust background task lifecycle using `flutter_foreground_task` to maintain surveillance capabilities and system-level monitoring even when the app is in the background.
 - **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and **Strategy-based Semantic Chunking**. Uses a hierarchical authority model and specialized parsers for different legal document types (Laws, Jurisprudence, etc.) to inject context directly into LLM prompts.
 - **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for Gemini 3 Flash models, significantly reducing latency on supported hardware while maintaining precision.
-- **Persona Vault Architecture**: A sophisticated persona management system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
+- **Persona Management Architecture**: A sophisticated system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
+- **Multimodal Personal Vault**: A secure, local-first repository for user images and documents. Uses **HNSW Vector Search** via ObjectBox for semantic retrieval, allowing the LLM to search for and "remember" physical objects, text in images, and environment details.
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
 
 ## Tech Stack
@@ -29,6 +30,7 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - `lib/features/chat/`: Core chat interface, specialized LLM sub-services (`PromptManager`, `ToolParser`), and input components.
 - `lib/features/rag/`: Document ingestion, PDF processing with Syncfusion, and semantic text chunking logic.
 - `lib/features/settings/`: Core persona management and application-wide configuration services.
+- `lib/features/vault/`: Multimodal storage layer, HNSW vector search implementation, and image analysis models.
 - `lib/core/theme/`: Shared styling, including the `SystemLockOverlay` ("Armor").
 - `lib/core/constants/`: Centralized native communication channels and shared identifiers.
 - `android/app/src/main/kotlin/...`: Native Android implementation for LiteRT tools, GeofenceBroadcastReceiver, and MethodChannel bridges.
@@ -68,6 +70,7 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Geofencing State**: Geofence metadata is managed locally via ObjectBox to ensure consistency with Android's system-level geofence triggers, surviving device reboots and app restarts.
 - **Strategy-Based RAG Chunking**: Implements a `ChunkingStrategy` factory pattern that handles structural integrity (articles/chapters/rubros) differently based on the document type, ensuring high-fidelity retrieval for Mexican legal texts.
 - **Hardware-Accelerated Inference**: Leverages GPU-bound LiteRT execution with Speculative Decoding to provide a responsive, local-first AI experience on modern mobile hardware.
+- **Multimodal Semantic Storage**: The Personal Vault uses on-device image analysis and text extraction to build a semantic map of the user's data. Search queries are converted into embeddings and matched against the local HNSW index for high-precision retrieval.
 
 ## Testing & Compatibility
 

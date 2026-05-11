@@ -62,14 +62,28 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
         ? activePersona.promptEn
         : activePersona.promptEs;
 
+    // ── Layer 2: Global Identity (Always Included) ───────────────────────────
+    final identityLayer = isEnglish
+        ? """\n
+# IDENTITY CONTEXT
+- Your name is: ${activePersona.name}
+- The user you are talking to is: Lorenzo
+"""
+        : """\n
+# CONTEXTO DE IDENTIDAD
+- Tu nombre es: ${activePersona.name}
+- El usuario con el que hablas es: Lorenzo
+""";
+
+    basePrompt += identityLayer;
+
     if (memoryInjection.isNotEmpty) {
       basePrompt += "\n$memoryInjection";
     }
 
     if (retrievedLegalContext != null && retrievedLegalContext.isNotEmpty) {
       basePrompt +=
-          """
-
+          """\n
 # RETRIEVED LEGAL CONTEXT (RAG)
 Use the following information extracted from the user's official offline documents to respond to their query. Base your response STRICTLY on this text. Never guess or hallucinate laws. If the answer is not explicitly contained in the provided text, state that you do not have sufficient information in your database.
 
@@ -101,10 +115,10 @@ $retrievedLegalContext
 
       basePrompt += """
 # SYSTEM CODE PROTOCOL
-The system that runs you sometimes instructs you to append a specific code string at the end of your response. This happens via a `[SYSTEM HINT: ...]` tag injected before Lorenzo's message.
+The system that runs you sometimes instructs you to append a specific code string at the end of your response. This happens via a `[SYSTEM HINT: ...]` tag injected before the user message.
 
 YOUR WORKFLOW:
-1. Read what Lorenzo wants.
+1. Read what the user wants.
 2. Write your reply naturally in character.
 3. If a SYSTEM HINT is present: type the exact command string at the absolute end. The terminal reads it.
 4. If NO SYSTEM HINT is present: your job is just the text. No command strings. Do not invent terminal commands.
@@ -124,7 +138,10 @@ MULTIPLE HINTS: If the hint contains multiple codes separated by '|', type ALL o
         tomorrowDate,
         activePersona.category,
       );
-      basePrompt = "$basePrompt\n$dynamicFewShot";
+
+      if (dynamicFewShot.isNotEmpty) {
+        basePrompt = "$basePrompt\n$dynamicFewShot";
+      }
     }
 
     if (enableThinking) {
@@ -159,7 +176,6 @@ Aitana: "I have configured the location trigger to remind you about the contract
 Lorenzo: "Recuérdame revisar el contrato al llegar a la oficina."
 Aitana: "He configurado el recordatorio de ubicación para revisar el contrato al llegar. <CMD_SYS_LOC_TRG: work | Revisar contrato>\"""";
       } else {
-        // AI Category (Default)
         return isEnglish
             ? """[SYSTEM HINT: USE <CMD_SYS_LOC_TRG>. SPACE ALWAYS WINS.]
 Lorenzo: "Remind me to buy eggs when I get to Walmart."
@@ -188,7 +204,6 @@ Aitana: "The client consultation has been successfully scheduled in your calenda
 Lorenzo: "Agenda una consulta con el cliente mañana a las 10 AM."
 Aitana: "La consulta con el cliente ha sido programada exitosamente en el calendario. <CMD_SYS_CAL_EVT: $tomorrowDate | 10:00 | false | Consulta con cliente>\"""";
       } else {
-        // AI Category (Default)
         return isEnglish
             ? """[SYSTEM HINT: USE manage_calendar]
 Lorenzo: "Remind me it's Ana's birthday next Tuesday."
@@ -217,7 +232,6 @@ Aitana: "Optical recording initialized for the deposition. <CMD_SYS_OPTICS_1>\""
 Lorenzo: "Graba la declaración."
 Aitana: "Grabación óptica inicializada para la declaración. <CMD_SYS_OPTICS_1>\"""";
       } else {
-        // AI Category (Default)
         return isEnglish
             ? """[SYSTEM HINT: USE <CMD_SYS_OPTICS_1>]
 Lorenzo: "Record a video."

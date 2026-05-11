@@ -12,6 +12,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:aitana/features/chat/services/llm/prompts/prompt_manager.dart';
 import 'package:aitana/features/chat/services/llm/tools/tool_parser.dart';
 import 'package:aitana/core/constants/native_channels.dart';
+import 'package:aitana/features/vault/tools/vault_search_tool.dart';
 
 /// Service that bridges the Flutter layer to the native LiteRT-LM engine
 /// running in Kotlin via [MethodChannel] and [EventChannel].
@@ -307,6 +308,11 @@ class LocalLlmService {
         return await _handleManageCalendar(
           call.arguments as Map<dynamic, dynamic>,
         );
+      }
+      if (call.method == 'search_vault') {
+        final args = call.arguments as Map<dynamic, dynamic>;
+        final keyword = args['keyword'] as String;
+        return await VaultSearchTool.searchVault(keyword);
       }
       return "Error: Unknown action.";
     });
@@ -607,10 +613,11 @@ class LocalLlmService {
     String? audioPath,
     Function(String)? onTokenUpdate,
 
-    /// Fired mid-stream the moment a device command tag is detected,
-    /// BEFORE the full response has finished streaming. The tag is
     /// already stripped from [cleanBuffer] so the UI never sees it.
     Function(String command)? onCommandDetected,
+
+    /// Fired mid-stream when a vault search request is detected.
+    Function(String query)? onVaultSearchDetected,
   }) async {
     if (_isGenerating) {
       debugPrint('🟡 [LocalLlmService] Inferencia ignorada: Motor ocupado.');
@@ -679,6 +686,10 @@ class LocalLlmService {
           debugPrint(
             '📅 [LocalLlmService] Calendar invocado: ${args['date']} ${args['time']} -> ${args['title']}',
           );
+        },
+        onVaultSearchDetected: (query) {
+          onVaultSearchDetected?.call(query);
+          debugPrint('🔐 [LocalLlmService] Vault Search invocado: $query');
         },
       );
 

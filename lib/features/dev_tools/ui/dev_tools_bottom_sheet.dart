@@ -3,8 +3,10 @@ import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
 import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
-import 'package:aitana/features/rag/screens/legal_library_screen.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
+import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
+import 'package:aitana/features/vault/services/batch_ingestion_manager.dart';
+import 'package:aitana/features/vault/ui/screens/vault_manager_screen.dart';
 
 /// @brief A comprehensive developer toolkit menu.
 ///
@@ -15,7 +17,7 @@ class DevToolsBottomSheet extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+      padding: const EdgeInsets.only(left: 24, right: 24, top: 20, bottom: 0),
       decoration: const BoxDecoration(
         color: Color(0xFF161719), // Deeper obsidian for dev tools
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
@@ -23,8 +25,9 @@ class DevToolsBottomSheet extends StatelessWidget {
           top: BorderSide(color: AppColors.glassBorder, width: 1.5),
         ),
       ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: ListView(
+        shrinkWrap: true,
+        physics: const ClampingScrollPhysics(),
         children: [
           // Drag handle
           Container(
@@ -35,7 +38,7 @@ class DevToolsBottomSheet extends StatelessWidget {
               borderRadius: BorderRadius.circular(2),
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
 
           Row(
             children: [
@@ -67,9 +70,11 @@ class DevToolsBottomSheet extends StatelessWidget {
               ),
             ],
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 8),
 
-          // Grid of tools
+          // ── Section: System & Surveillance ──────────────────────────────────────
+          _buildSectionHeader('System & Surveillance', Icons.sensors_rounded),
+          const SizedBox(height: 16),
           GridView.count(
             crossAxisCount: 2,
             shrinkWrap: true,
@@ -111,35 +116,18 @@ class DevToolsBottomSheet extends StatelessWidget {
                       Navigator.pop(context);
                       if (isRunning) {
                         await ForegroundServiceControl.stopService();
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Surveillance Terminated.'),
-                              backgroundColor: Colors.redAccent,
-                            ),
-                          );
-                        }
                       } else {
                         await ForegroundServiceControl.startService();
-                        if (context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text('Surveillance Manually Activated.'),
-                              backgroundColor: AppColors.cyberBlue,
-                            ),
-                          );
-                        }
                       }
                     },
                   );
                 },
               ),
               _DevToolTile(
-                title: 'Persona Vault',
+                title: 'Personalities Repo',
                 subtitle: 'LLM Identity Injector',
                 icon: Icons.psychology_rounded,
                 color: AppColors.cyberBlue,
-                enabled: true,
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.push(
@@ -151,81 +139,158 @@ class DevToolsBottomSheet extends StatelessWidget {
                 },
               ),
               _DevToolTile(
-                title: 'Legal Library',
-                subtitle: 'Offline RAG Sources',
-                icon: Icons.account_balance_rounded,
+                title: 'Personal Vault',
+                subtitle: 'Review Ingested Meta',
+                icon: Icons.security,
                 color: AppColors.cyberBlue,
-                enabled: true,
                 onTap: () {
                   Navigator.pop(context);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
-                      builder: (context) => const LegalLibraryScreen(),
+                      builder: (context) => VaultManagerScreen(
+                        batchManager: BatchIngestionManager(
+                          VaultIngestionService(),
+                        ),
+                      ),
                     ),
-                  );
-                },
-              ),
-              _DevToolTile(
-                title: 'Nuke Database',
-                subtitle: 'Wipe Persona & RAG Library',
-                icon: Icons.delete_forever_rounded,
-                color: Colors.redAccent,
-                onTap: () {
-                  // Capture the messenger BEFORE popping the bottom sheet
-                  final rootMessenger = ScaffoldMessenger.of(context);
-
-                  Navigator.pop(context);
-                  showDialog(
-                    context: context,
-                    builder: (BuildContext dialogContext) {
-                      return AlertDialog(
-                        backgroundColor: const Color(0xFF1E1F20),
-                        title: const Text(
-                          'Ruthless Nuke?',
-                          style: TextStyle(color: Colors.white),
-                        ),
-                        content: const Text(
-                          'Are you sure you want to wipe the Personas and Legal Library? This deletes physical PDF files and requires an app restart.',
-                          style: TextStyle(color: Colors.white70),
-                        ),
-                        actions: [
-                          TextButton(
-                            child: const Text(
-                              'Cancel',
-                              style: TextStyle(color: Colors.white54),
-                            ),
-                            onPressed: () => Navigator.of(dialogContext).pop(),
-                          ),
-                          TextButton(
-                            child: const Text(
-                              'Yes, Nuke it',
-                              style: TextStyle(color: Colors.redAccent),
-                            ),
-                            onPressed: () async {
-                              Navigator.of(dialogContext).pop();
-                              await ObjectBoxService.instance.nukeDatabase();
-
-                              rootMessenger.showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Database Nuked. Physical files deleted. Please restart the app.',
-                                  ),
-                                ),
-                              );
-                            },
-                          ),
-                        ],
-                      );
-                    },
                   );
                 },
               ),
             ],
           ),
-          const SizedBox(height: 32),
+          const SizedBox(height: 16),
+
+          // ── Section: Database & Storage Management ────────────────────────
+          _buildSectionHeader('Storage & Data Hygiene', Icons.storage_rounded),
+          const SizedBox(height: 16),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            mainAxisSpacing: 16,
+            crossAxisSpacing: 16,
+            childAspectRatio: 1.1,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
+              _DevToolTile(
+                title: 'Purge Legal Library',
+                subtitle: 'Wipe PDFs & Chunks',
+                icon: Icons.gavel_rounded,
+                color: Colors.white70,
+                onTap: () => _confirmNuke(
+                  context,
+                  'Purge Legal Library?',
+                  'This will delete all physical PDF documents and the semantic ObjectBox index.',
+                  () => ObjectBoxService.instance.nukeLegalLibrary(),
+                ),
+              ),
+              _DevToolTile(
+                title: 'Clear Chat Logs',
+                subtitle: 'Wipe conversation history',
+                icon: Icons.forum_rounded,
+                color: Colors.white70,
+                onTap: () => _confirmNuke(
+                  context,
+                  'Clear Chat History?',
+                  'This will permanently delete all conversations and message records.',
+                  () => ObjectBoxService.instance.nukeChatHistory(),
+                ),
+              ),
+              _DevToolTile(
+                title: 'Empty Personal Vault',
+                subtitle: 'Wipe Images & OCR',
+                icon: Icons.lock_reset_rounded,
+                color: Colors.white70,
+                onTap: () => _confirmNuke(
+                  context,
+                  'Empty Personal Vault?',
+                  'This will delete all analyzed images from the sandbox and purge the OCR database.',
+                  () => ObjectBoxService.instance.nukePersonalVault(),
+                ),
+              ),
+              _DevToolTile(
+                title: 'MASTER NUKE',
+                subtitle: 'Full Factory Reset',
+                icon: Icons.bolt_rounded,
+                color: Colors.redAccent,
+                onTap: () => _confirmNuke(
+                  context,
+                  'MASTER NUKE (Wipe Everything)?',
+                  'EXTREME DANGER: This wipes all chat history, legal documents, personas, and vault images. The system will be factory reset.',
+                  () => ObjectBoxService.instance.nukeDatabase(),
+                ),
+              ),
+            ],
+          ),
         ],
       ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title, IconData icon) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.white24, size: 16),
+        const SizedBox(width: 8),
+        Text(
+          title.toUpperCase(),
+          style: const TextStyle(
+            color: Colors.white38,
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            letterSpacing: 1.5,
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _confirmNuke(
+    BuildContext context,
+    String title,
+    String content,
+    Future<void> Function() action,
+  ) {
+    final rootMessenger = ScaffoldMessenger.of(context);
+
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          backgroundColor: const Color(0xFF1E1F20),
+          title: Text(title, style: const TextStyle(color: Colors.white)),
+          content: Text(content, style: const TextStyle(color: Colors.white70)),
+          actions: [
+            TextButton(
+              child: const Text(
+                'CANCEL',
+                style: TextStyle(color: Colors.white54),
+              ),
+              onPressed: () => Navigator.of(dialogContext).pop(),
+            ),
+            TextButton(
+              child: const Text(
+                'EXECUTE NUKE',
+                style: TextStyle(
+                  color: Colors.redAccent,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              onPressed: () async {
+                Navigator.of(dialogContext).pop(); // Close dialog
+                Navigator.of(context).pop(); // Close bottom sheet
+                await action();
+                rootMessenger.showSnackBar(
+                  const SnackBar(
+                    content: Text('Operation Complete. Target Purged.'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
     );
   }
 }
@@ -236,7 +301,6 @@ class _DevToolTile extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback onTap;
-  final bool enabled;
 
   const _DevToolTile({
     required this.title,
@@ -244,40 +308,30 @@ class _DevToolTile extends StatelessWidget {
     required this.icon,
     required this.color,
     required this.onTap,
-    this.enabled = true,
   });
 
   @override
   Widget build(BuildContext context) {
-    final effectiveColor = enabled ? color : Colors.white10;
-
     return InkWell(
-      onTap: enabled ? onTap : null,
+      onTap: onTap,
       borderRadius: BorderRadius.circular(16),
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: enabled
-              ? effectiveColor.withAlpha(20)
-              : Colors.white.withAlpha(5),
+          color: color.withAlpha(20),
           borderRadius: BorderRadius.circular(16),
-          border: Border.all(
-            color: enabled
-                ? effectiveColor.withAlpha(40)
-                : Colors.white.withAlpha(10),
-            width: 1,
-          ),
+          border: Border.all(color: color.withAlpha(40), width: 1),
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, color: effectiveColor, size: 28),
+            Icon(icon, color: color, size: 28),
             const SizedBox(height: 12),
             Text(
               title,
-              style: TextStyle(
-                color: enabled ? Colors.white : Colors.white38,
+              style: const TextStyle(
+                color: Colors.white,
                 fontFamily: 'Outfit',
                 fontWeight: FontWeight.bold,
                 fontSize: 14,
@@ -286,8 +340,8 @@ class _DevToolTile extends StatelessWidget {
             const SizedBox(height: 4),
             Text(
               subtitle,
-              style: TextStyle(
-                color: enabled ? Colors.white54 : Colors.white12,
+              style: const TextStyle(
+                color: Colors.white54,
                 fontFamily: 'Outfit',
                 fontSize: 10,
               ),

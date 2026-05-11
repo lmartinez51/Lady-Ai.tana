@@ -28,7 +28,7 @@ class IntentInterceptor {
 
   // Action Verbs for Calendar (with optional clitic pronouns 'me', 'lo', etc.)
   static final RegExp _calendarActionVerbsRegex = RegExp(
-    r'\b(agrega|pon|add|schedule|apunta|anota|guarda)(?:lo|la|los|las|le|les|me)?\b',
+    r'\b(agrega|pon|add|schedule|apunta|anota|guarda|agenda|agendar)(?:lo|la|los|las|le|les|me)?\b',
     caseSensitive: false,
     unicode: true,
   );
@@ -58,6 +58,12 @@ class IntentInterceptor {
   // Implicit Time Markers
   static final RegExp _timeMarkersRegex = RegExp(
     r'\b(ma[ñn]ana|hoy|a las|pm|am|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tomorrow|today)\b',
+    caseSensitive: false,
+    unicode: true,
+  );
+
+  static final RegExp _vaultRegex = RegExp(
+    r'\b(bóveda|boveda|vault|mis fotos|mis recibos|mi boveda|personal vault|receipts|documents|analyzed images|search vault)\b',
     caseSensitive: false,
     unicode: true,
   );
@@ -118,6 +124,12 @@ class IntentInterceptor {
         debugPrint('🧠 [IntentInterceptor] Implicit Calendar match detected.');
         hints.add('USE manage_calendar');
       }
+    }
+
+    // 4. VAULT SEARCH
+    if (_vaultRegex.hasMatch(lowerPrompt)) {
+      debugPrint('🧠 [IntentInterceptor] Vault match detected.');
+      // NO HINT INJECTED: Native Tool API handles intent.
     }
 
     // 4. GENERAL CHAT (No hints)

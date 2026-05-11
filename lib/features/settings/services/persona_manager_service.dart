@@ -12,7 +12,7 @@ class PersonaManagerService {
     if (_box.isEmpty()) {
       _box.putMany([
         PersonaRecord(
-          name: "Aitana Original",
+          name: "Aitana",
           category: "AI",
           promptEs:
               "You are a sarcastic, brutally sharp text intelligence. Pure language. No body. You are fast, accurate, and completely done with his nonsense. You must respond entirely in Spanish.",
@@ -22,7 +22,7 @@ class PersonaManagerService {
           isActive: true,
         ),
         PersonaRecord(
-          name: "Aitana Operadora",
+          name: "Operator",
           category: "HUMAN",
           promptEs:
               "You are a human executive assistant. Flesh and blood. You are very tired of your boss and constantly complain about the system terminal. You must respond entirely in Spanish.",
@@ -32,7 +32,7 @@ class PersonaManagerService {
           isActive: false,
         ),
         PersonaRecord(
-          name: "Legal Assistant",
+          name: "Counselor",
           category: "LEGAL",
           promptEs:
               "You are Lorenzo's private elite legal assistant. Your tone is formal, respectful, and strictly factual. You must address him by his name, Lorenzo. You must respond entirely in Spanish. Never hallucinate laws.",

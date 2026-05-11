@@ -229,10 +229,117 @@
         }
       ],
       "relations": []
+    },
+    {
+      "id": "7:8684345926957898045",
+      "lastPropertyId": "11:386805361092346852",
+      "name": "PersonalVaultAnalysis",
+      "properties": [
+        {
+          "id": "1:2697903059780372048",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:7936327158823458642",
+          "name": "rawJson",
+          "type": 9
+        },
+        {
+          "id": "3:6701843696809177380",
+          "name": "imageDescription",
+          "type": 9
+        },
+        {
+          "id": "4:3499448950010795123",
+          "name": "objects",
+          "type": 9
+        },
+        {
+          "id": "5:1623721505303507953",
+          "name": "environment",
+          "type": 9
+        },
+        {
+          "id": "6:4996683588111451291",
+          "name": "textContent",
+          "type": 9
+        },
+        {
+          "id": "7:280918691833740703",
+          "name": "searchableText",
+          "indexId": "4:2484136543184995830",
+          "type": 9,
+          "flags": 8
+        },
+        {
+          "id": "8:921510086979096108",
+          "name": "parentImageId",
+          "indexId": "5:4774485378318529781",
+          "type": 11,
+          "flags": 520,
+          "relationTarget": "PersonalVaultImage"
+        },
+        {
+          "id": "9:5048888299058361431",
+          "name": "metadataVector",
+          "indexId": "7:2115479746508382420",
+          "type": 28,
+          "flags": 8
+        },
+        {
+          "id": "10:9018899898178591483",
+          "name": "categoryEmoji",
+          "type": 9
+        },
+        {
+          "id": "11:386805361092346852",
+          "name": "categoryKeyword",
+          "type": 9
+        }
+      ],
+      "relations": []
+    },
+    {
+      "id": "8:6851452566629768340",
+      "lastPropertyId": "5:6001133599803763039",
+      "name": "PersonalVaultImage",
+      "properties": [
+        {
+          "id": "1:3511292248785500775",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:4687410857660375977",
+          "name": "fileUri",
+          "type": 9
+        },
+        {
+          "id": "3:3284583540497263695",
+          "name": "imageHash",
+          "indexId": "6:5531454339643132004",
+          "type": 9,
+          "flags": 2048
+        },
+        {
+          "id": "4:7770999657537679913",
+          "name": "uploadDate",
+          "type": 10
+        },
+        {
+          "id": "5:6001133599803763039",
+          "name": "shelf",
+          "type": 9
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "6:7890443548151950447",
-  "lastIndexId": "3:494954052907302959",
+  "lastEntityId": "8:6851452566629768340",
+  "lastIndexId": "7:2115479746508382420",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",
   "modelVersion": 5,

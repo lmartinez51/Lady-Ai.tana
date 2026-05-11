@@ -4,6 +4,7 @@ class ToolParser {
   final Function(String command)? onCommandDetected;
   final Function(String location, String task)? onGeofenceDetected;
   final Function(Map<String, dynamic> args)? onCalendarDetected;
+  final Function(String query)? onVaultSearchDetected;
 
   // ─── Internal Buffers ─────────────────────────────────────────────────────
 
@@ -35,10 +36,14 @@ class ToolParser {
     r'<CMD_SYS_CAL_EVT:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^>]+)>',
   );
 
+  static final RegExp vaultSearchRegex =
+      RegExp(r'<CMD_SYS_VAULT_SRCH:\s*([^>]+)>');
+
   ToolParser({
     this.onCommandDetected,
     this.onGeofenceDetected,
     this.onCalendarDetected,
+    this.onVaultSearchDetected,
   });
 
   /// Arms the parser for a specific turn, allowing only certain tags to trigger callbacks.
@@ -159,6 +164,17 @@ class ToolParser {
       }
     }
 
+    final vaultMatch = vaultSearchRegex.firstMatch(cleanBuffer.toString());
+    if (vaultMatch != null) {
+      final tag = vaultMatch.group(0)!;
+      _stripTag(tag);
+
+      if (_isArmed && _allowedTags.contains('<CMD_SYS_VAULT_SRCH:')) {
+        final query = vaultMatch.group(1)?.trim() ?? '';
+        onVaultSearchDetected?.call(query);
+      }
+    }
+
     // ── 4. UI Text Formatting (Flicker Prevention) ─────────────────────────
 
     String uiText = cleanBuffer
@@ -166,17 +182,20 @@ class ToolParser {
         .replaceAll(startVideoTag, '')
         .replaceAll(stopVideoTag, '')
         .replaceAll(geofenceRegex, '')
-        .replaceAll(calendarRegex, '');
+        .replaceAll(calendarRegex, '')
+        .replaceAll(vaultSearchRegex, '');
 
     // Avoid partial tags appearing in the UI
     uiText = uiText.replaceAll(RegExp(r'<CMD_SYS_LOC_TRG:[^>]*$'), '');
     uiText = uiText.replaceAll(RegExp(r'<CMD_SYS_CAL_EVT:[^>]*$'), '');
+    uiText = uiText.replaceAll(RegExp(r'<CMD_SYS_VAULT_SRCH:[^>]*$'), '');
 
     final possibleTags = [
       startVideoTag,
       stopVideoTag,
       '<CMD_SYS_LOC_TRG:',
       '<CMD_SYS_CAL_EVT:',
+      '<CMD_SYS_VAULT_SRCH:',
     ];
 
     for (final tag in possibleTags) {
