@@ -123,15 +123,21 @@ class ChatHeaderWidget extends StatelessWidget {
                                     valueListenable:
                                         LocalLlmService.currentModel,
                                     builder: (context, currentModel, _) {
-                                      return Text(
-                                        'Lady Ai.tana (${currentModel.shortName})      [${LocalLlmService.currentLanguage}]',
-                                        style: TextStyle(
-                                          color: modelColor,
-                                          fontFamily: 'Outfit',
-                                          fontWeight: FontWeight.w600,
-                                          fontSize: 14,
-                                        ),
-                                        overflow: TextOverflow.ellipsis,
+                                      return ValueListenableBuilder<String>(
+                                        valueListenable: LocalLlmService
+                                            .currentLanguageNotifier,
+                                        builder: (context, currentLang, _) {
+                                          return Text(
+                                            'Lady Ai.tana (${currentModel.shortName})      [$currentLang]',
+                                            style: TextStyle(
+                                              color: modelColor,
+                                              fontFamily: 'Outfit',
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 14,
+                                            ),
+                                            overflow: TextOverflow.ellipsis,
+                                          );
+                                        },
                                       );
                                     },
                                   ),

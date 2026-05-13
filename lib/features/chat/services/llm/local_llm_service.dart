@@ -32,7 +32,9 @@ class LocalLlmService {
 
   // ─── Internal state ───────────────────────────────────────────────────────
 
-  static String currentLanguage = 'ES';
+  static final ValueNotifier<String> currentLanguageNotifier = ValueNotifier(
+    'ES',
+  );
   static bool _isInitialized = false;
 
   /// In-flight initialization guard.
@@ -452,7 +454,7 @@ class LocalLlmService {
   static Future<ModelSwitchResult> autoSwitchModelForCategory(
     String category,
   ) async {
-    final targetBaseName = category == 'LEGAL'
+    final targetBaseName = (category == 'LEGAL' || category == 'HUMAN')
         ? 'gemma_4b_variant'
         : 'gemma_4b';
 

@@ -368,7 +368,11 @@ class _MainChatScreenState extends State<MainChatScreen>
         final activeCategory = ObjectBoxService.instance.personaManager
             .getActivePersona()
             .category;
-        final isLegalMode = activeCategory == 'LEGAL';
+        final isRestrictedMode =
+            activeCategory == 'LEGAL' || activeCategory == 'HUMAN';
+        final restrictionReason = activeCategory == 'LEGAL'
+            ? 'model locked for factual accuracy.'
+            : 'model locked for uncensored persona.';
 
         return SafeArea(
           child: ValueListenableBuilder<AiModelInfo>(
@@ -389,7 +393,7 @@ class _MainChatScreenState extends State<MainChatScreen>
                       ),
                     ),
                   ),
-                  if (isLegalMode)
+                  if (isRestrictedMode)
                     Padding(
                       padding: const EdgeInsets.symmetric(
                         horizontal: 16,
@@ -397,14 +401,16 @@ class _MainChatScreenState extends State<MainChatScreen>
                       ),
                       child: Row(
                         children: [
-                          const Icon(
+                          Icon(
                             Icons.lock_outline,
-                            color: Color(0xFFFFD700),
+                            color: activeCategory == 'HUMAN'
+                                ? const Color(0xFF03DAC6)
+                                : const Color(0xFFFFD700),
                             size: 14,
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            'Legal Mode: model locked for factual accuracy.',
+                            '${activeCategory == 'HUMAN' ? 'Human' : 'Legal'} Mode: $restrictionReason',
                             style: TextStyle(
                               color: Colors.white.withAlpha(153),
                               fontFamily: 'Outfit',
@@ -416,9 +422,9 @@ class _MainChatScreenState extends State<MainChatScreen>
                     ),
                   ...AiModelCatalog.models.map((model) {
                     final isSelected = currentModel.baseName == model.baseName;
-                    // In Legal Mode, only the variant model is selectable.
+                    // In Restricted Mode, only the variant model is selectable.
                     final isDisabled =
-                        isLegalMode && model.baseName == 'gemma_4b';
+                        isRestrictedMode && model.baseName == 'gemma_4b';
 
                     return Opacity(
                       opacity: isDisabled ? 0.4 : 1.0,
@@ -440,9 +446,9 @@ class _MainChatScreenState extends State<MainChatScreen>
                           ),
                         ),
                         subtitle: isDisabled
-                            ? const Text(
-                                'Disabled in Legal Mode for factual accuracy.',
-                                style: TextStyle(
+                            ? Text(
+                                'Disabled in ${activeCategory == 'HUMAN' ? 'Human' : 'Legal'} Mode.',
+                                style: const TextStyle(
                                   color: Colors.white38,
                                   fontFamily: 'Outfit',
                                   fontSize: 11,
@@ -685,7 +691,8 @@ class _MainChatScreenState extends State<MainChatScreen>
       if (mounted) {
         setState(() {
           _isLoading = false;
-          final isSpanish = LocalLlmService.currentLanguage == 'ES';
+          final isSpanish =
+              LocalLlmService.currentLanguageNotifier.value == 'ES';
           String statusMsg;
           if (result == IngestionStatus.success) {
             statusMsg = isSpanish
@@ -1570,36 +1577,43 @@ class _MainChatScreenState extends State<MainChatScreen>
                               fontWeight: FontWeight.w500,
                             ),
                           ),
-                          trailing: CupertinoSlidingSegmentedControl<String>(
-                            groupValue: LocalLlmService.currentLanguage,
-                            backgroundColor: const Color(0xFF1E1F20),
-                            thumbColor: AppColors.cyberBlue.withAlpha(40),
-                            children: const {
-                              'ES': Text(
-                                ' ES ',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontFamily: 'Outfit',
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                              'EN': Text(
-                                ' EN ',
-                                style: TextStyle(
-                                  color: Colors.white,
-                                  fontFamily: 'Outfit',
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            },
-                            onValueChanged: (String? newValue) {
-                              if (newValue != null &&
-                                  newValue != LocalLlmService.currentLanguage) {
-                                setState(() {
-                                  LocalLlmService.currentLanguage = newValue;
-                                });
-                                LocalLlmService.resetSessionState();
-                              }
+                          trailing: ValueListenableBuilder<String>(
+                            valueListenable:
+                                LocalLlmService.currentLanguageNotifier,
+                            builder: (context, currentLang, _) {
+                              return CupertinoSlidingSegmentedControl<String>(
+                                groupValue: currentLang,
+                                backgroundColor: const Color(0xFF1E1F20),
+                                thumbColor: AppColors.cyberBlue.withAlpha(40),
+                                children: const {
+                                  'ES': Text(
+                                    ' ES ',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontFamily: 'Outfit',
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  'EN': Text(
+                                    ' EN ',
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontFamily: 'Outfit',
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                },
+                                onValueChanged: (String? newValue) {
+                                  if (newValue != null &&
+                                      newValue != currentLang) {
+                                    LocalLlmService
+                                            .currentLanguageNotifier
+                                            .value =
+                                        newValue;
+                                    LocalLlmService.resetSessionState();
+                                  }
+                                },
+                              );
                             },
                           ),
                           shape: RoundedRectangleBorder(

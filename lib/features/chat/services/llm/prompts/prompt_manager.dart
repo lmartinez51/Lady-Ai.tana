@@ -56,23 +56,22 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
         : "Your events for TODAY:\n${todayEventsList.join('\n')}";
 
     final memoryInjection = getMemoryInjection(activeSessionSummary);
-    final bool isEnglish = LocalLlmService.currentLanguage == 'EN';
+    final bool isEnglish =
+        LocalLlmService.currentLanguageNotifier.value == 'EN';
 
     String basePrompt = isEnglish
         ? activePersona.promptEn
         : activePersona.promptEs;
 
     // ── Layer 2: Global Identity (Always Included) ───────────────────────────
-    final identityLayer = isEnglish
-        ? """\n
-# IDENTITY CONTEXT
-- Your name is: ${activePersona.name}
-- The user you are talking to is: Lorenzo
-"""
-        : """\n
-# CONTEXTO DE IDENTIDAD
-- Tu nombre es: ${activePersona.name}
-- El usuario con el que hablas es: Lorenzo
+    final relationship = activePersona.category == 'AI'
+        ? 'boss and creator'
+        : 'boss';
+    final identityLayer =
+        """\n
+# GLOBAL IDENTITY CONTEXT
+- Your active name is: ${activePersona.name}
+- You are talking to Lorenzo, your $relationship.
 """;
 
     basePrompt += identityLayer;

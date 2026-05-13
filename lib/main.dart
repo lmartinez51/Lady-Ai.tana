@@ -51,12 +51,15 @@ void main() async {
     // being active — breaking the factual accuracy guarantee.
     final startupPersona = ObjectBoxService.instance.personaManager
         .getActivePersona();
-    if (startupPersona.category == 'LEGAL') {
+    LocalLlmService.currentLanguageNotifier.value = startupPersona.defaultLang;
+
+    if (startupPersona.category == 'LEGAL' ||
+        startupPersona.category == 'HUMAN') {
       final variantModel = AiModelCatalog.findByBaseName('gemma_4b_variant');
       if (variantModel != null) {
         LocalLlmService.currentModel.value = variantModel;
         debugPrint(
-          '🧠 [MoE Startup] LEGAL persona active → '
+          '🧠 [MoE Startup] ${startupPersona.category} persona active → '
           'pre-selecting ${variantModel.displayName}',
         );
       }

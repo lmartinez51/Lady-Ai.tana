@@ -29,7 +29,7 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
 
   Future<void> _handlePersonaTap(PersonaRecord persona) async {
     ObjectBoxService.instance.personaManager.setActivePersona(persona.id);
-    LocalLlmService.currentLanguage = persona.defaultLang;
+    LocalLlmService.currentLanguageNotifier.value = persona.defaultLang;
 
     // MoE Router: auto-load the correct model for this persona's category.
     await LocalLlmService.autoSwitchModelForCategory(persona.category);
@@ -48,7 +48,7 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
   }
 
   void _showEditDialog(PersonaRecord persona) {
-    final isEn = LocalLlmService.currentLanguage == 'EN';
+    final isEn = LocalLlmService.currentLanguageNotifier.value == 'EN';
     final TextEditingController controller = TextEditingController(
       text: isEn ? persona.promptEn : persona.promptEs,
     );
@@ -110,7 +110,8 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
                 ),
               ),
               onPressed: () {
-                final isEn = LocalLlmService.currentLanguage == 'EN';
+                final isEn =
+                    LocalLlmService.currentLanguageNotifier.value == 'EN';
                 ObjectBoxService.instance.personaManager.updatePersonaPrompt(
                   persona.id,
                   controller.text,
@@ -191,7 +192,7 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
               subtitle: Padding(
                 padding: const EdgeInsets.only(top: 8.0),
                 child: Text(
-                  LocalLlmService.currentLanguage == 'EN'
+                  LocalLlmService.currentLanguageNotifier.value == 'EN'
                       ? persona.promptEn
                       : persona.promptEs,
                   maxLines: 2,
