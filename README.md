@@ -4,7 +4,7 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 
 ## Key Features
 
-- **Local LLM Inference**: Runs Google's Gemma models directly on-device using LiteRT, with support for hot-swapping between different model variants (e.g., standard assistant vs. "Real Assistant" persona).
+- **Local LLM Inference**: Runs Google's **Gemma-4-E4B-it** models directly on-device using LiteRT, with support for hot-swapping between the standard assistant and the **Gemma-4-E4B-it-Uncensored** variant.
 - **Advanced Context Management**: Multi-model prompt routing architecture that dynamically injects calendar, time, and persistent memory context into the prompt while maintaining distinct personas.
 - **Intent Interceptor Architecture**: Pre-processes user inputs using regular expressions (with robust support for Spanish enclitic pronouns) to inject system hints and optimize LLM reasoning.
 - **Calendar & Task Management**: Parses secure `<CMD_SYS_CAL_EVT>` tags from LLM responses to trigger native Android calendar and alarm APIs via MethodChannels.
@@ -14,7 +14,7 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Contextual Actions**: Implements a premium, glassmorphic long-press contextual menu for chat messages to facilitate actions like copying text.
 - **Persistent Foreground Services**: Implements a robust background task lifecycle using `flutter_foreground_task` to maintain surveillance capabilities and system-level monitoring even when the app is in the background.
 - **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and **Strategy-based Semantic Chunking**. Uses a hierarchical authority model and specialized parsers for different legal document types (Laws, Jurisprudence, etc.) to inject context directly into LLM prompts.
-- **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for Gemini 3 Flash models, significantly reducing latency on supported hardware while maintaining precision.
+- **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for **Gemma-4-E4B-it** models, significantly reducing latency on supported hardware while maintaining precision.
 - **Persona Management Architecture**: A sophisticated system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
 - **Multimodal Personal Vault**: A secure, local-first repository for user images and documents. Uses **HNSW Vector Search** via ObjectBox for semantic retrieval, allowing the LLM to search for and "remember" physical objects, text in images, and environment details.
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
