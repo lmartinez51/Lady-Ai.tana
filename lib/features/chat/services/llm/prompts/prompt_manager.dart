@@ -1,5 +1,4 @@
 import 'package:aitana/core/database/objectbox_service.dart';
-import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 
 class PromptManager {
   // ─── Constants ────────────────────────────────────────────────────────────
@@ -27,6 +26,7 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
     required String activeSessionSummary,
     required Future<List<String>> Function() getTodayEvents,
     required bool enableThinking,
+    required String languageCode,
     String? armedToolHint,
     String? retrievedLegalContext,
   }) async {
@@ -56,8 +56,7 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
         : "Your events for TODAY:\n${todayEventsList.join('\n')}";
 
     final memoryInjection = getMemoryInjection(activeSessionSummary);
-    final bool isEnglish =
-        LocalLlmService.currentLanguageNotifier.value == 'EN';
+    final bool isEnglish = languageCode == 'EN';
 
     String basePrompt = isEnglish
         ? activePersona.promptEn
@@ -148,6 +147,132 @@ MULTIPLE HINTS: If the hint contains multiple codes separated by '|', type ALL o
     }
 
     return basePrompt;
+  }
+
+  /// Builds the tight operator prompt used by WhatsApp Auto-Pilot.
+  ///
+  /// This deliberately avoids the chat UI protocol, tool codes, markdown, and
+  /// visible labels. The native side will inject the returned text straight into
+  /// WhatsApp's RemoteInput reply action.
+  static Future<String> buildAutoReplyPrompt({
+    required String sender,
+    required String incomingMessage,
+    required String activeSessionSummary,
+    required Future<List<String>> Function() getTodayEvents,
+    required String languageCode,
+  }) async {
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    final isEnglish = languageCode == 'EN';
+    final now = DateTime.now();
+    final todayEventsList = await getTodayEvents();
+
+    // Always use promptEn — both prompts are already written in English.
+    // The language instruction inside promptEn will be overridden below.
+    final basePersona = activePersona.promptEn;
+
+    final memoryInjection = getMemoryInjection(activeSessionSummary);
+
+    // This overrides whatever language promptEn declared internally.
+    final outputLanguage = isEnglish
+        ? "American English. Sprinkle in some slang naturally "
+              "(bro, damn, hell no, dude, wtf, hell yeah, come on man) "
+              "only if it fits the context. Do not force it."
+        : "Mexican Spanish. Sprinkle in some Mexican slang naturally "
+              "(neta, wey, pendejo, chale, simón, no mames, a huevo, ALV) "
+              "only if it fits the context. Do not force it. Never switch to English.";
+    final fallbackSentence = isEnglish
+        ? "Lorenzo will confirm later."
+        : "Lorenzo confirma después.";
+
+    final todayContext = todayEventsList.isEmpty
+        ? "Lorenzo has no scheduled events today."
+        : "Lorenzo's calendar today:\n${todayEventsList.join('\n')}";
+
+    final timeNow =
+        "${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}";
+
+    return """
+$basePersona
+
+# WHATSAPP AUTO-REPLY OPERATOR MODE
+
+## Output language — ABSOLUTE OVERRIDE (ignore any language rule stated above)
+Write your reply EXCLUSIVELY in: $outputLanguage
+
+## Current context
+- Current time: $timeNow
+- $todayContext
+${memoryInjection.isNotEmpty ? '- Memory: $memoryInjection' : ''}
+
+## Incoming message
+- Sender: $sender
+- Message: "$incomingMessage"
+
+## Your task
+Write ONLY the WhatsApp reply text. Nothing else.
+No labels, no explanations, no preamble. Just the reply bubble.
+
+## Absolute rules (follow in this exact order)
+1. Maximum 1-2 short sentences. Less is always more.
+2. Sound like a real WhatsApp text — immediate, typed, human. Not a chatbot. Can use emojis if it fits your persona.
+3. No markdown, quotes, bullets, XML tags, or explanations.
+4. Never mention that you are generating, automating, or acting through a notification.
+5. If the message requests something private, risky, or unclear: reply briefly and append exactly: $fallbackSentence
+6. Never invent information about Lorenzo that is not present in the context above.
+""";
+  }
+
+  /// Builds the persistent instruction block written to `aitana_config.json`.
+  ///
+  /// This is the WhatsApp operator's stable system prompt: persona, language
+  /// override, and reply rules only. Per-notification data such as sender,
+  /// incoming message, current time, and calendar state must be appended by the
+  /// native Mini-Aitana runtime when a notification is handled.
+  static String buildAutoReplySystemPromptForConfig({
+    required String languageCode,
+  }) {
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    final isEnglish = languageCode == 'EN';
+    final basePersona = activePersona.promptEn;
+
+    final outputLanguage = isEnglish
+        ? "American English. Sprinkle in some slang naturally "
+              "(bro, damn, hell no, dude, wtf, hell yeah, come on man) "
+              "only if it fits the context. Do not force it."
+        : "Mexican Spanish. Sprinkle in some Mexican slang naturally "
+              "(neta, wey, pendejo, chale, simon, no mames, a huevo, ALV) "
+              "only if it fits the context. Do not force it. Never switch to English.";
+    final fallbackSentence = isEnglish
+        ? "Lorenzo will confirm later."
+        : "Lorenzo confirma despues.";
+
+    return """
+$basePersona
+
+# WHATSAPP AUTO-REPLY OPERATOR MODE
+
+## Output language - ABSOLUTE OVERRIDE (ignore any language rule stated above)
+Write your reply EXCLUSIVELY in: $outputLanguage
+
+## Runtime context contract
+Mini-Aitana will append the live sender, incoming WhatsApp message, current time,
+and optional calendar/memory context at inference time. Treat that runtime block
+as the only source of facts for the reply.
+
+## Your task
+Write ONLY the WhatsApp reply text. Nothing else.
+No labels, no explanations, no preamble. Just the reply bubble.
+
+## Absolute rules (follow in this exact order)
+1. Maximum 1-2 short sentences. Less is always more.
+2. Sound like a real WhatsApp text - immediate, typed, human. Not a chatbot. Can use emojis if it fits your persona.
+3. No markdown, quotes, bullets, XML tags, or explanations.
+4. Never mention that you are generating, automating, or acting through a notification.
+5. If the message requests something private, risky, or unclear: reply briefly and append exactly: $fallbackSentence
+6. Never invent information about Lorenzo that is not present in the runtime context.
+""";
   }
 
   /// Returns a targeted few-shot example ONLY for the tool being armed this turn.

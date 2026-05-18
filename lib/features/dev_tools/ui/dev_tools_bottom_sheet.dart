@@ -1,18 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
+import 'package:aitana/core/services/notifications/notification_monitor_service.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
 import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
 import 'package:aitana/features/vault/services/batch_ingestion_manager.dart';
 import 'package:aitana/features/vault/ui/screens/vault_manager_screen.dart';
+import 'package:aitana/features/notifications/ui/auto_pilot_whitelist_screen.dart';
 
 /// @brief A comprehensive developer toolkit menu.
 ///
 /// Styled as a "Hacker/God Mode" control panel for Aitana.
-class DevToolsBottomSheet extends StatelessWidget {
+class DevToolsBottomSheet extends StatefulWidget {
   const DevToolsBottomSheet({super.key});
+
+  @override
+  State<DevToolsBottomSheet> createState() => _DevToolsBottomSheetState();
+}
+
+class _DevToolsBottomSheetState extends State<DevToolsBottomSheet>
+    with WidgetsBindingObserver {
+  bool _hasNotificationAccess = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshNotificationAccess();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshNotificationAccess();
+    }
+  }
+
+  Future<void> _refreshNotificationAccess() async {
+    final hasAccess = await NotificationMonitorService.hasNotificationAccess();
+    if (!mounted) return;
+    setState(() => _hasNotificationAccess = hasAccess);
+  }
+
+  Future<void> _openNotificationAccessSettings() async {
+    await NotificationMonitorService.openNotificationAccessSettings();
+    await _refreshNotificationAccess();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -120,6 +161,34 @@ class DevToolsBottomSheet extends StatelessWidget {
                         await ForegroundServiceControl.startService();
                       }
                     },
+                  );
+                },
+              ),
+              _DevToolTile(
+                title: 'Notification Access',
+                subtitle: _hasNotificationAccess
+                    ? 'WhatsApp interceptor armed'
+                    : 'Open Android settings',
+                icon: _hasNotificationAccess
+                    ? Icons.notifications_active_rounded
+                    : Icons.notifications_off_rounded,
+                color: _hasNotificationAccess
+                    ? Colors.greenAccent
+                    : Colors.orangeAccent,
+                onTap: _openNotificationAccessSettings,
+              ),
+              _DevToolTile(
+                title: 'Auto-Pilot List',
+                subtitle: 'WhatsApp reply contacts',
+                icon: Icons.contact_phone_rounded,
+                color: AppColors.cyberBlue,
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => const AutoPilotWhitelistScreen(),
+                    ),
                   );
                 },
               ),

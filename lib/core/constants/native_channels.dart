@@ -10,4 +10,11 @@ class NativeChannels {
 
   /// The broadcast stream for low-level device events (e.g. video recording status).
   static const String deviceEvents = 'com.lmartinez.aitana/device_events';
+
+  /// Bridge for Android NotificationListenerService access management.
+  static const String notificationMonitor =
+      'com.lmartinez.aitana/notification_monitor';
+
+  /// Bridge for WhatsApp auto-pilot request/response handoff.
+  static const String autoPilot = 'com.lmartinez.aitana/autopilot';
 }

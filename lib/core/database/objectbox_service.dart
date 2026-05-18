@@ -11,6 +11,7 @@ import 'package:aitana/features/rag/models/legal_knowledge_chunk.dart';
 import 'package:aitana/features/rag/models/legal_document_record.dart';
 import 'package:aitana/features/vault/models/personal_vault_image.dart';
 import 'package:aitana/features/vault/models/personal_vault_analysis.dart';
+import 'package:aitana/features/notifications/models/auto_pilot_contact.dart';
 
 /// Pairs a retrieved chunk with its in-memory relevance score.
 ///
@@ -42,6 +43,7 @@ class ObjectBoxService {
   // 🔐 PERSONAL VAULT
   late final Box<PersonalVaultImage> vaultImageBox;
   late final Box<PersonalVaultAnalysis> vaultAnalysisBox;
+  late final Box<AutoPilotContact> autoPilotContactBox;
 
   /// Cached chunk count — invalidated whenever a document is saved or deleted.
   ///
@@ -71,6 +73,7 @@ class ObjectBoxService {
     legalChunkBox = Box<LegalKnowledgeChunk>(_store);
     vaultImageBox = Box<PersonalVaultImage>(_store);
     vaultAnalysisBox = Box<PersonalVaultAnalysis>(_store);
+    autoPilotContactBox = Box<AutoPilotContact>(_store);
   }
 
   /// Create an instance of ObjectBoxService to use throughout the app.
@@ -276,6 +279,7 @@ class ObjectBoxService {
     // Final purge of remaining metadata
     _store.runInTransaction(TxMode.write, () {
       personaBox.removeAll();
+      autoPilotContactBox.removeAll();
     });
 
     debugPrint('✅ [ObjectBox] System factory reset complete.');

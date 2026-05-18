@@ -1603,14 +1603,12 @@ class _MainChatScreenState extends State<MainChatScreen>
                                     ),
                                   ),
                                 },
-                                onValueChanged: (String? newValue) {
+                                onValueChanged: (String? newValue) async {
                                   if (newValue != null &&
                                       newValue != currentLang) {
-                                    LocalLlmService
-                                            .currentLanguageNotifier
-                                            .value =
-                                        newValue;
-                                    LocalLlmService.resetSessionState();
+                                    await LocalLlmService.setLanguageOverride(
+                                      newValue,
+                                    );
                                   }
                                 },
                               );

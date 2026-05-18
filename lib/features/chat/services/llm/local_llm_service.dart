@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:aitana/core/database/objectbox_service.dart';
+import 'package:aitana/core/services/autopilot/aitana_config_bridge.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/features/chat/services/llm/models/llm_inference_params.dart';
 import 'package:aitana/core/services/calendar/calendar_service.dart';
@@ -230,6 +231,7 @@ class LocalLlmService {
       activeSessionSummary: activeSessionSummary,
       getTodayEvents: () => CalendarService().getTodayEvents(),
       enableThinking: _currentParams.enableThinking,
+      languageCode: currentLanguageNotifier.value,
       armedToolHint: armedToolHint,
       retrievedLegalContext: retrievedLegalContext,
     );
@@ -329,6 +331,44 @@ class LocalLlmService {
     debugPrint('🔌 [LocalLlmService] Tool listener cleared.');
   }
 
+  /// Updates the global language override and refreshes the Mini-Aitana config.
+  static Future<void> setLanguageOverride(
+    String languageCode, {
+    bool resetContext = true,
+    bool syncConfig = true,
+  }) async {
+    currentLanguageNotifier.value = languageCode;
+
+    if (resetContext) {
+      await resetSessionState();
+    }
+
+    if (syncConfig) {
+      await syncAutoPilotConfig(reason: 'language_change');
+    }
+  }
+
+  /// Writes the current Flutter-controlled Auto-Pilot configuration to disk.
+  ///
+  /// The native Mini-Aitana runtime reads this JSON without depending on the
+  /// Flutter isolate. Callers may provide [activeWhitelistOverride] when they
+  /// have just computed the fresh whitelist and want to avoid a second DB read.
+  static Future<void> syncAutoPilotConfig({
+    required String reason,
+    List<String>? activeWhitelistOverride,
+  }) async {
+    try {
+      await AitanaConfigBridge.syncAutoPilotConfig(
+        reason: reason,
+        modelBaseName: currentModel.value.baseName,
+        languageCode: currentLanguageNotifier.value,
+        activeWhitelistOverride: activeWhitelistOverride,
+      );
+    } catch (e) {
+      debugPrint('[LocalLlmService] Auto-Pilot config sync skipped: $e');
+    }
+  }
+
   /// Initializes the native LiteRT-LM engine if not already done.
   ///
   /// Safe to call multiple times and from concurrent callers — subsequent
@@ -419,6 +459,7 @@ class LocalLlmService {
         currentModel.value = targetModel;
         status.value = 'ready';
         await clearContext();
+        await syncAutoPilotConfig(reason: 'model_switch');
         debugPrint('✅ [LocalLlmService] Cambio de modelo exitoso.');
         return ModelSwitchResult.success;
       } else {
@@ -470,6 +511,7 @@ class LocalLlmService {
       debugPrint(
         '⚡ [MoE Router] "${target.displayName}" already active. No switch needed.',
       );
+      await syncAutoPilotConfig(reason: 'persona_change_model_unchanged');
       return ModelSwitchResult.alreadyActive;
     }
 
@@ -596,6 +638,99 @@ class LocalLlmService {
   }
 
   // ─── Core inference ───────────────────────────────────────────────────────
+
+  /// Runs a private one-shot text generation for WhatsApp Auto-Pilot.
+  ///
+  /// This does not attach to [_stream], does not touch [_activeSubscription],
+  /// and uses a temporary native Conversation so the main chat memory remains
+  /// untouched. Native still serializes execution through the shared
+  /// inferenceMutex, so it cannot overlap with visible chat generation.
+  @Deprecated(
+    'Mini-Aitana now performs WhatsApp Auto-Pilot inference natively. '
+    'This Dart path is retained only for rollback.',
+  )
+  static Future<String> runAutoReplyInference({
+    required String sender,
+    required String message,
+  }) async {
+    try {
+      if (!_isInitialized) {
+        final initResult = await initModel();
+        if (initResult != 'model_ready') return '';
+      }
+
+      final params = const LlmInferenceParams(
+        temperature: 0.7,
+        topK: 40,
+        topP: 0.85,
+        repetitionPenalty: 1.2,
+        enableThinking: false,
+      );
+
+      final systemPrompt = await PromptManager.buildAutoReplyPrompt(
+        sender: sender,
+        incomingMessage: message,
+        activeSessionSummary: activeSessionSummary,
+        getTodayEvents: () => CalendarService().getTodayEvents(),
+        languageCode: currentLanguageNotifier.value,
+      );
+
+      final prompt =
+          'Write the WhatsApp reply to "$sender" for this message:\n$message';
+
+      final rawReply = await _channel
+          .invokeMethod<String>('sendOneShotMessage', {
+            'prompt': prompt,
+            'system_prompt': systemPrompt,
+            ...params.toMap(),
+          })
+          .timeout(const Duration(seconds: 75));
+
+      final cleanReply = _cleanAutoReply(rawReply ?? '');
+      debugPrint('[WhatsAppAutoPilot] Aitana drafted: $cleanReply');
+      return cleanReply;
+    } on PlatformException catch (e) {
+      debugPrint(
+        '[WhatsAppAutoPilot] Native one-shot error: ${e.code} ${e.message}',
+      );
+      return '';
+    } on TimeoutException {
+      debugPrint('[WhatsAppAutoPilot] One-shot inference timed out.');
+      return '';
+    } catch (e) {
+      debugPrint('[WhatsAppAutoPilot] One-shot inference failed: $e');
+      return '';
+    }
+  }
+
+  static String _cleanAutoReply(String raw) {
+    var text = raw.trim();
+    if (text.isEmpty) return '';
+
+    text = text.replaceAll(
+      RegExp(r'<\|channel>thought.*?<channel\|>', dotAll: true),
+      '',
+    );
+    text = text.replaceAll(
+      RegExp(
+        r'^(aitana|reply|respuesta|whatsapp reply)\s*:\s*',
+        caseSensitive: false,
+      ),
+      '',
+    );
+    text = text
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .join(' ');
+
+    while ((text.startsWith('"') && text.endsWith('"')) ||
+        (text.startsWith("'") && text.endsWith("'"))) {
+      text = text.substring(1, text.length - 1).trim();
+    }
+
+    return text;
+  }
 
   /// Runs a single inference turn against the LiteRT-LM engine.
   ///

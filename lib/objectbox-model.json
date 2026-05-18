@@ -336,9 +336,33 @@
         }
       ],
       "relations": []
+    },
+    {
+      "id": "9:3825911524217159080",
+      "lastPropertyId": "3:8113201492263010425",
+      "name": "AutoPilotContact",
+      "properties": [
+        {
+          "id": "1:1496952926625798055",
+          "name": "id",
+          "type": 6,
+          "flags": 1
+        },
+        {
+          "id": "2:8853358312134726331",
+          "name": "contactName",
+          "type": 9
+        },
+        {
+          "id": "3:8113201492263010425",
+          "name": "isActive",
+          "type": 1
+        }
+      ],
+      "relations": []
     }
   ],
-  "lastEntityId": "8:6851452566629768340",
+  "lastEntityId": "9:3825911524217159080",
   "lastIndexId": "7:2115479746508382420",
   "lastRelationId": "0:0",
   "lastSequenceId": "0:0",

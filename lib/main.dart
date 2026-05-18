@@ -8,6 +8,7 @@ import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
+import 'package:aitana/core/services/notifications/auto_pilot_whitelist_service.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/geofencing/services/geofence_service.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
@@ -51,7 +52,11 @@ void main() async {
     // being active — breaking the factual accuracy guarantee.
     final startupPersona = ObjectBoxService.instance.personaManager
         .getActivePersona();
-    LocalLlmService.currentLanguageNotifier.value = startupPersona.defaultLang;
+    await LocalLlmService.setLanguageOverride(
+      startupPersona.defaultLang,
+      resetContext: false,
+      syncConfig: false,
+    );
 
     if (startupPersona.category == 'LEGAL' ||
         startupPersona.category == 'HUMAN') {
@@ -69,6 +74,8 @@ void main() async {
     await LocalLlmService.initModel();
     // Inyectamos la instancia Singleton al puente nativo
     LocalLlmService.setupNativeToolListener();
+    await AutoPilotWhitelistService.syncActiveWhitelist();
+    await LocalLlmService.syncAutoPilotConfig(reason: 'startup_audit');
     // 📡 Subscribe to native hardware device events (video recording state, etc.)
     DeviceEventService.initialize();
 

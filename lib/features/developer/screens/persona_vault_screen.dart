@@ -29,7 +29,11 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
 
   Future<void> _handlePersonaTap(PersonaRecord persona) async {
     ObjectBoxService.instance.personaManager.setActivePersona(persona.id);
-    LocalLlmService.currentLanguageNotifier.value = persona.defaultLang;
+    await LocalLlmService.setLanguageOverride(
+      persona.defaultLang,
+      resetContext: false,
+      syncConfig: false,
+    );
 
     // MoE Router: auto-load the correct model for this persona's category.
     await LocalLlmService.autoSwitchModelForCategory(persona.category);
@@ -109,7 +113,7 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
                   borderRadius: BorderRadius.circular(8),
                 ),
               ),
-              onPressed: () {
+              onPressed: () async {
                 final isEn =
                     LocalLlmService.currentLanguageNotifier.value == 'EN';
                 ObjectBoxService.instance.personaManager.updatePersonaPrompt(
@@ -119,6 +123,9 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
                 );
                 Navigator.pop(ctx);
                 _loadPersonas();
+                await LocalLlmService.syncAutoPilotConfig(
+                  reason: 'persona_prompt_edit',
+                );
               },
               child: const Text(
                 'Save',
