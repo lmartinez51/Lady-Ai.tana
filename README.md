@@ -16,14 +16,14 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and **Strategy-based Semantic Chunking**. Uses a hierarchical authority model and specialized parsers for different legal document types (Laws, Jurisprudence, etc.) to inject context directly into LLM prompts.
 - **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for **Gemma-4-E4B-it** models, significantly reducing latency on supported hardware while maintaining precision.
 - **Persona Management Architecture**: A sophisticated system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
-- **Multimodal Personal Vault**: A secure, local-first repository for user images and documents. Uses **HNSW Vector Search** via ObjectBox for semantic retrieval, allowing the LLM to search for and "remember" physical objects, text in images, and environment details.
+- **Multimodal Personal Vault**: A secure, local-first repository for user images and documents. It features a high-contrast, agnostic data extraction pipeline where images are parsed into a strict flat JSON containing the `"key_identifiers"` key. This captures distinct alphanumeric tracking numbers, serial codes, invoice IDs, proper nouns, and quantities across any image type. These identifiers are fully indexed under ObjectBox Full-Text Search and integrated into the hierarchical semantic vector array for high-precision local RAG via **HNSW Vector Search**.
 - **Clean Architecture**: Built on solid principles with a feature-driven design, ensuring separation of concerns between UI, domain logic, and native platform integrations.
 
 ## Tech Stack
 
 - **Frontend**: Flutter & Dart
 - **Backend / Platform**: Android (Kotlin)
-- **Local AI**: LiteRT (TensorFlow Lite for Runtimes)
+- **Local AI**: LiteRT (TensorFlow Lite for Runtimes) powering a specialized twin-model local pipeline. It utilizes **Gemma-4** for core reasoning and vision tasks, and **`embeddinggemma-300m.tflite`** as the dedicated local embedding model for the 768-dimension semantic vector layout.
 - **Persistence**: ObjectBox (Fast Edge Database for Dart & Kotlin)
 
 ## Project Structure
@@ -57,7 +57,8 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
    ```
 
 3. **Model Setup:**
-   Ensure the necessary LiteRT model files are placed in the appropriate assets or device storage directory as expected by the `LocalLlmService`.
+   Ensure the necessary LiteRT model files are placed in the appropriate assets or device storage directory as expected by the `LocalLlmService`. 
+   *Note:* Local `.tflite` binary models (such as `embeddinggemma-300m.tflite`) are excluded from Git version control via `.gitignore` due to size constraints and must be seeded manually into the appropriate assets framework directory before running the app.
 
 4. **Run the app:**
    ```bash
