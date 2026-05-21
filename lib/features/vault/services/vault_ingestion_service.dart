@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'package:image/image.dart' as img;
 import 'package:aitana/features/chat/services/llm/models/llm_inference_params.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -87,36 +88,49 @@ class VaultIngestionService {
       // Copy to the secure sandbox.
       await File(sourcePath).copy(destinationPath);
 
+      // Downscale to max 512x512, compress to JPEG 80% quality, and save to cache.
+      final String inferenceImagePath = await _downscaleAndCompressImage(
+        destinationPath,
+        sandboxPath,
+      );
+
       // Step 3: Vision LLM Inference
       // Construct the strict extraction prompt optimized for Gemma 4 (Flat JSON - Agnostic).
       const String prompt = '''
-Analyze the provided image and extract all identifiable visual information. 
-Return the results strictly as a FLAT JSON object. DO NOT use nested arrays or nested objects.
+You are a structured data extraction engine. Your output is always machine-parsed.
 
-Include the following exact keys:
+ABSOLUTE RULES:
+- Return ONLY a single flat JSON object. No nested objects, no nested arrays.
+- No markdown, no code blocks, no explanations, no text outside the JSON.
+- All values must be strings. Empty string ("") if a field has no data.
+- Do not invent data not visible in the image.
 
-1. "image_description"
-   - A concise overall summary of what the image depicts (string).
+Analyze the image and return exactly these 7 keys:
 
-2. "objects"
-   - A single comma-separated string listing all distinct items, subjects, or elements visible in the image.
-   - Include their approximate relative position in parentheses if applicable.
-   - Example format: "Item A (position), Item B (position), Item C"
+"text_content": Every word, number, code, or phrase readable in the image, 
+  concatenated into one continuous string separated by spaces. 
+  Preserve serial numbers and codes verbatim.
 
-3. "environment"
-   - A single string describing the general setting, context, or conditions shown.
+"key_identifiers": Comma-separated list of distinct identifiers only: 
+  tracking numbers, invoice IDs, serial codes, account numbers, 
+  exact quantities, specific dates, unique proper nouns. 
+  Include all. Do not summarize.
 
-4. "text_content"
-   - A single string containing any visible readable text, separated by spaces. Leave empty if no text is present.
+"image_description": One concise sentence describing exactly what the image shows.
 
-5. "emoji"
-   - A single emoji that best represents the primary subject of the image (string).
+"objects": Comma-separated list of all visible physical items or subjects, 
+  each optionally followed by its position in parentheses.
 
-6. "keyword"
-   - STRICTLY ONE SINGLE WORD (e.g., "Auto", "Food", "Receipt", "Document") summarizing the primary category of the image (string).
+"environment": One string describing the setting, background, lighting, 
+  or physical context of the image.
 
-Do not include explanations or conversational filler outside the JSON structure.
-Return ONLY valid, flat JSON.
+"emoji": The single emoji that best represents the primary subject of the image.
+
+"keyword": Exactly one word from this list that best classifies the image:
+  Document, Receipt, Invoice, Hardware, Vehicle, Person, Animal, 
+  Food, Location, Product, Media, Object, Other.
+
+Return the JSON now.
 ''';
 
       // 🔴 INYECTAR DETERMINISMO CONTROLADO 🔴
@@ -125,8 +139,7 @@ Return ONLY valid, flat JSON.
           temperature: 0.25, // Un poco de "aire" para poder cerrar los nodos
           topK: 10, // Margen de maniobra para no atascarse en 1 solo token
           topP: 0.8,
-          repetitionPenalty:
-              1.05, // Un levísimo castigo a la repetición para romper bucles
+          repetitionPenalty: 1.20, // Scaled up to break repeating patterns
           enableThinking: false,
         ),
       );
@@ -134,7 +147,8 @@ Return ONLY valid, flat JSON.
       // Invoke the existing LocalLlmService to run vision inference.
       final String rawResponse = await LocalLlmService.runInference(
         prompt,
-        imagePath: destinationPath,
+        imagePath: inferenceImagePath,
+        isStructuredOutput: true,
       );
 
       // Step 4: JSON Sanitization & Parsing
@@ -156,6 +170,7 @@ Return ONLY valid, flat JSON.
         _safeExtract(data['image_description']),
         _safeExtract(data['objects']),
         _safeExtract(data['text_content']),
+        _safeExtract(data['key_identifiers']),
       ].where((s) => s.isNotEmpty).join(' ');
 
       final vector = await EmbeddingService.generateEmbedding(semanticString);
@@ -224,6 +239,71 @@ Return ONLY valid, flat JSON.
       _safeExtract(data['objects']),
       _safeExtract(data['environment']),
       _safeExtract(data['text_content']),
+      _safeExtract(data['key_identifiers']),
     ].where((v) => v.isNotEmpty).join(' ');
+  }
+
+  /// Downscales the image at [sourcePath] to a maximum resolution of 512x512
+  /// preserving aspect ratio, compresses it to JPEG (80% quality), saves it to
+  /// a cache file ('compressed_vault_input.jpg') in [sandboxPath], and returns the path.
+  Future<String> _downscaleAndCompressImage(
+    String sourcePath,
+    String sandboxPath,
+  ) async {
+    try {
+      final File originalFile = File(sourcePath);
+      final Uint8List bytes = await originalFile.readAsBytes();
+
+      final img.Image? image = img.decodeImage(bytes);
+      if (image == null) {
+        debugPrint(
+          'VaultIngestionService: Failed to decode image for optimization, falling back to original.',
+        );
+        return sourcePath;
+      }
+
+      int? targetWidth;
+      int? targetHeight;
+      if (image.width > image.height) {
+        if (image.width > 512) {
+          targetWidth = 512;
+        }
+      } else {
+        if (image.height > 512) {
+          targetHeight = 512;
+        }
+      }
+
+      img.Image resized = image;
+      if (targetWidth != null || targetHeight != null) {
+        resized = img.copyResize(
+          image,
+          width: targetWidth,
+          height: targetHeight,
+        );
+        debugPrint(
+          'VaultIngestionService: Downscaled image from ${image.width}x${image.height} to ${resized.width}x${resized.height}',
+        );
+      } else {
+        debugPrint(
+          'VaultIngestionService: Image is within bounds (${image.width}x${image.height}), no downscaling needed.',
+        );
+      }
+
+      final List<int> compressedBytes = img.encodeJpg(resized, quality: 80);
+      final String compressedPath = p.join(
+        sandboxPath,
+        'compressed_vault_input.jpg',
+      );
+      final File compressedFile = File(compressedPath);
+      await compressedFile.writeAsBytes(compressedBytes);
+
+      return compressedPath;
+    } catch (e) {
+      debugPrint(
+        'VaultIngestionService image optimization error: $e. Falling back to original.',
+      );
+      return sourcePath;
+    }
   }
 }

@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/vault/services/embedding_service.dart';
@@ -39,16 +40,30 @@ class VaultSearchTool {
 
     // Sort by relevance (number of hits) or simply take the top 3 recent entries.
     final topResults = results.take(3).toList();
-    final buffer = StringBuffer("--- PERSONAL VAULT SEARCH RESULTS ---\n");
+    final buffer = StringBuffer();
+    buffer.writeln("[SYSTEM NOTIFICATION: Automated internal tool 'search_vault' successfully retrieved the requested records from ObjectBox database. The user Lorenzo did NOT execute this query; your background subroutine fetched it instantly. Process these facts as your own secure knowledge before resuming your response.]\n");
+    buffer.writeln("--- PERSONAL VAULT DATABASE SEARCH RESULTS ---");
 
     for (var i = 0; i < topResults.length; i++) {
       final res = topResults[i];
       final image = res.parentImage.target;
 
+      // Extract key_identifiers if present in rawJson
+      String keyIdentifiers = '';
+      try {
+        final Map<String, dynamic> data = jsonDecode(res.rawJson);
+        if (data.containsKey('key_identifiers')) {
+          keyIdentifiers = data['key_identifiers']?.toString() ?? '';
+        }
+      } catch (_) {}
+
       buffer.writeln("[Match #${i + 1}]");
       buffer.writeln("Visual Description: ${res.imageDescription}");
       buffer.writeln("Objects Detected: ${res.objects}");
       buffer.writeln("Exact OCR Text found in image: ${res.textContent}");
+      if (keyIdentifiers.isNotEmpty) {
+        buffer.writeln("Key Identifiers: $keyIdentifiers");
+      }
       buffer.writeln("Environment: ${res.environment}");
 
       if (image != null) {

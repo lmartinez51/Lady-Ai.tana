@@ -25,7 +25,8 @@ class PersonalVaultAnalysis {
   @Index(type: IndexType.value)
   String searchableText;
 
-  @HnswIndex(dimensions: 384)
+  /// 768-dimensional vector produced by [embeddinggemma-300m].
+  @HnswIndex(dimensions: 768)
   Float32List? metadataVector;
 
   String? categoryEmoji;

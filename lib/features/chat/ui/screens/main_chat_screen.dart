@@ -27,6 +27,7 @@ import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
 import 'package:aitana/features/vault/tools/vault_search_tool.dart';
+import 'package:aitana/features/rag/screens/legal_library_screen.dart';
 
 class MainChatScreen extends StatefulWidget {
   const MainChatScreen({super.key});
@@ -1614,6 +1615,55 @@ class _MainChatScreenState extends State<MainChatScreen>
                               );
                             },
                           ),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          contentPadding: const EdgeInsets.only(
+                            left: 40,
+                            right: 20,
+                            top: 4,
+                            bottom: 4,
+                          ),
+                        ),
+                        ListTile(
+                          leading: Container(
+                            width: 36,
+                            height: 36,
+                            decoration: BoxDecoration(
+                              color: AppColors.cyberBlue.withAlpha(20),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(
+                              Icons.local_library_rounded,
+                              color: AppColors.cyberBlue,
+                              size: 20,
+                            ),
+                          ),
+                          title: const Text(
+                            'Legal Library',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontFamily: 'Outfit',
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                          subtitle: const Text(
+                            'Manage knowledge base & ingest PDFs',
+                            style: TextStyle(
+                              color: AppColors.textMedium,
+                              fontFamily: 'Outfit',
+                              fontSize: 12,
+                            ),
+                          ),
+                          onTap: () {
+                            Navigator.pop(context); // Close drawer
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => const LegalLibraryScreen(),
+                              ),
+                            );
+                          },
                           shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12),
                           ),

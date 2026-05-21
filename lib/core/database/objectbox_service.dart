@@ -11,7 +11,7 @@ import 'package:aitana/features/rag/models/legal_knowledge_chunk.dart';
 import 'package:aitana/features/rag/models/legal_document_record.dart';
 import 'package:aitana/features/vault/models/personal_vault_image.dart';
 import 'package:aitana/features/vault/models/personal_vault_analysis.dart';
-import 'package:aitana/features/notifications/models/auto_pilot_contact.dart';
+
 
 /// Pairs a retrieved chunk with its in-memory relevance score.
 ///
@@ -43,7 +43,7 @@ class ObjectBoxService {
   // 🔐 PERSONAL VAULT
   late final Box<PersonalVaultImage> vaultImageBox;
   late final Box<PersonalVaultAnalysis> vaultAnalysisBox;
-  late final Box<AutoPilotContact> autoPilotContactBox;
+
 
   /// Cached chunk count — invalidated whenever a document is saved or deleted.
   ///
@@ -73,10 +73,15 @@ class ObjectBoxService {
     legalChunkBox = Box<LegalKnowledgeChunk>(_store);
     vaultImageBox = Box<PersonalVaultImage>(_store);
     vaultAnalysisBox = Box<PersonalVaultAnalysis>(_store);
-    autoPilotContactBox = Box<AutoPilotContact>(_store);
+
   }
 
   /// Create an instance of ObjectBoxService to use throughout the app.
+  ///
+  /// On first launch after a breaking schema change (e.g. HNSW dimension bump
+  /// from 384 → 768), ObjectBox throws a [DbException]. The recovery handler
+  /// below detects this, wipes the stale database directory, and opens a fresh
+  /// store so the app continues without a crash.
   static Future<void> create() async {
     // Patrón Idempotente: Si ya se inicializó, no hacemos nada y salimos.
     if (_instance != null) return;
@@ -95,11 +100,39 @@ class ObjectBoxService {
     try {
       store = await openStore(directory: dbPath);
     } catch (e) {
-      if (e.toString().contains('10001')) {
+      final msg = e.toString();
+
+      if (msg.contains('10001')) {
+        // ── Hot-restart / Foreground Service race: attach to the running store ─
         debugPrint(
           '⚠️ [ObjectBox] Store already open (likely by Foreground Service). Attaching...',
         );
         store = Store.attach(getObjectBoxModel(), dbPath);
+      } else if (msg.contains('10097') ||
+          msg.contains('schema') ||
+          msg.contains('dimensions') ||
+          msg.contains('HNSW') ||
+          msg.contains('model mismatch')) {
+        // ── HNSW dimension mismatch / schema migration ─────────────────────
+        //
+        // This fires when the code-side annotation changes (e.g. 384 → 768
+        // dimensions) but an on-disk store with the old schema already exists.
+        // Strategy: nuke the stale DB directory and open a clean store.
+        // Physical sandbox files (images) are NOT stored here and are safe.
+        debugPrint(
+          '🚨 [ObjectBox] Schema mismatch detected ($msg). '
+          'Nuking database directory for clean migration: $dbPath',
+        );
+        try {
+          await Directory(dbPath).delete(recursive: true);
+          debugPrint('🗑️ [ObjectBox] Stale database directory deleted.');
+        } catch (deleteErr) {
+          debugPrint('🔴 [ObjectBox] Failed to delete DB dir: $deleteErr');
+        }
+        // Re-create the directory and open a fresh store
+        await Directory(dbPath).create(recursive: true);
+        store = await openStore(directory: dbPath);
+        debugPrint('✅ [ObjectBox] Fresh store opened after schema migration.');
       } else {
         rethrow;
       }
@@ -279,7 +312,6 @@ class ObjectBoxService {
     // Final purge of remaining metadata
     _store.runInTransaction(TxMode.write, () {
       personaBox.removeAll();
-      autoPilotContactBox.removeAll();
     });
 
     debugPrint('✅ [ObjectBox] System factory reset complete.');

@@ -6,7 +6,10 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import java.security.MessageDigest
+import java.util.Locale
 import android.util.Log
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterFragmentActivity
@@ -94,9 +97,7 @@ import android.widget.FrameLayout
 
 import java.io.File
 import com.google.common.util.concurrent.ListenableFuture
-import com.lmartinez.aitana.aitana.autopilot.AiEngineLeaseManager
-import com.lmartinez.aitana.aitana.autopilot.AutoPilotStateStore
-import com.lmartinez.aitana.aitana.autopilot.ModelFileResolver
+import com.lmartinez.aitana.aitana.ModelFileResolver
 
 /**
  * MainActivity bridges the Flutter UI layer to the native LiteRT-LM inference
@@ -119,14 +120,14 @@ import com.lmartinez.aitana.aitana.autopilot.ModelFileResolver
  * `send*` call lazily re-creates it with whatever [SamplerConfig] it receives,
  * guaranteeing that updated params are honored without restarting the [Engine].
  */
-class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProvider {
+class MainActivity : FlutterFragmentActivity() {
 
     // ─── Engine / Session state ───────────────────────────────────────────────
 
     private var engine       : Engine?       = null
     private var conversation : Conversation? = null
     private var streamSink   : EventChannel.EventSink? = null
-    private var aiEngineLease: AiEngineLeaseManager.Lease? = null
+    private var activeInferenceJob: kotlinx.coroutines.Job? = null
 
     private val engineMutex       = Mutex()
     private val conversationMutex = Mutex()
@@ -158,7 +159,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
 
     /** Launcher for the SYSTEM_ALERT_WINDOW (overlay) permission Settings screen. */
     private lateinit var overlayPermissionLauncher: ActivityResultLauncher<Intent>
-    private lateinit var contactsPermissionLauncher: ActivityResultLauncher<String>
 
     // Floating overlay
     private var overlayView: View? = null
@@ -182,13 +182,21 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
      */
     private val geofenceTriggeredReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context, intent: android.content.Intent) {
-            if (intent.action != GeofenceBroadcastReceiver.ACTION_GEOFENCE_TRIGGERED) return
-            val triggeredId = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_GEOFENCE_ID)
-                ?: return
-            Log.d("MainActivity", "📡 Relaying geofence trigger to Dart: ID=$triggeredId")
-            // invokeMethod is not thread-safe — must run on the main/UI thread.
-            runOnUiThread {
-                geofenceMethodChannel?.invokeMethod("onGeofenceTriggered", triggeredId)
+            when (intent.action) {
+                GeofenceBroadcastReceiver.ACTION_GEOFENCE_TRIGGERED -> {
+                    val triggeredId = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_GEOFENCE_ID) ?: return
+                    Log.d("MainActivity", "📡 Relaying geofence trigger to Dart: ID=$triggeredId")
+                    runOnUiThread {
+                        geofenceMethodChannel?.invokeMethod("onGeofenceTriggered", triggeredId)
+                    }
+                }
+                GeofenceBroadcastReceiver.ACTION_GEOFENCE_CLEARED -> {
+                    val clearedId = intent.getStringExtra(GeofenceBroadcastReceiver.EXTRA_GEOFENCE_ID) ?: return
+                    Log.d("MainActivity", "📡 Relaying geofence clear to Dart: ID=$clearedId")
+                    runOnUiThread {
+                        geofenceMethodChannel?.invokeMethod("onGeofenceCleared", clearedId)
+                    }
+                }
             }
         }
     }
@@ -196,31 +204,50 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
     // Puente entre el callback nativo de Android y el resultado del MethodChannel
     @Volatile
     private var pendingPermissionResult: MethodChannel.Result? = null
-    @Volatile
-    private var pendingContactsPermissionResult: MethodChannel.Result? = null
 
     // ─── Wi-Fi Sniper state ───────────────────────────────────────────────────
     private val wifiNetworkRequest = NetworkRequest.Builder()
         .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
         .build()
 
-    private val wifiSniperCallback = object : ConnectivityManager.NetworkCallback() {
+    private val wifiCallbackHandler = Handler(Looper.getMainLooper())
+    private val trackedWifiSsidsByNetwork = mutableMapOf<Network, String>()
+
+    private val wifiSniperCallback = object : ConnectivityManager.NetworkCallback(
+        ConnectivityManager.NetworkCallback.FLAG_INCLUDE_LOCATION_INFO
+    ) {
         override fun onCapabilitiesChanged(
             network: Network,
             capabilities: NetworkCapabilities
         ) {
             val wifiInfo = capabilities.transportInfo as? WifiInfo
-            val ssid = wifiInfo?.ssid
+            val normalizedSsid = GeofenceUtils.normalizeSsid(wifiInfo?.ssid)
 
-            ssid?.let { rawSsid ->
-                val cleanSsid = rawSsid.removeSurrounding("\"").lowercase()
-                val prefs = getSharedPreferences("wifi_sniper_map", Context.MODE_PRIVATE)
-                val geofenceId = prefs.getString(cleanSsid, null)
-                if (geofenceId != null) {
-                    Log.i("WifiSniper", "🎯 SSID match! Firing synthetic trigger for: $geofenceId")
-                    GeofenceUtils.fireSyntheticTrigger(this@MainActivity, geofenceId)
-                }
+            if (normalizedSsid == null) {
+                Log.d("WifiSniper", "Wi-Fi capabilities changed with redacted or unknown SSID.")
+                GeofenceUtils.reconcileWifiSniper(this@MainActivity, null)
+                return
             }
+
+            val previousSsid = trackedWifiSsidsByNetwork.put(network, normalizedSsid)
+            if (previousSsid != null && previousSsid != normalizedSsid) {
+                GeofenceUtils.reconcileWifiSniper(this@MainActivity, previousSsid, force = true)
+            }
+
+            GeofenceUtils.reconcileWifiSniper(this@MainActivity, normalizedSsid)
+
+            val prefs = getSharedPreferences("wifi_sniper_map", Context.MODE_PRIVATE)
+            val geofenceId = prefs.getString(normalizedSsid, null)
+            if (geofenceId != null) {
+                Log.i("WifiSniper", "SSID match! Firing synthetic trigger for: $geofenceId")
+                GeofenceUtils.fireSyntheticTrigger(this@MainActivity, geofenceId)
+            }
+        }
+
+        override fun onLost(network: Network) {
+            super.onLost(network)
+            val droppedSsid = trackedWifiSsidsByNetwork.remove(network)
+            GeofenceUtils.reconcileWifiSniper(this@MainActivity, droppedSsid, force = true)
         }
     }
 
@@ -263,22 +290,26 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
     private val embeddingMutex = Mutex()
 
     /**
-     * Initializes or returns the cached LiteRT Interpreter for the embedding model.
-     * Dimensions: 384 (MiniLM standard).
+     * Initialises or returns the cached LiteRT Interpreter for the embedding model.
+     *
+     * Model  : embeddinggemma-300m
+     * Output : 768-dimensional float32 vector (Matryoshka-capable; we use full 768).
+     * Input  : Single tensor [1, seqLen] of int32 token IDs.
+     *          BOS = 2  |  EOS = 1  |  vocab size = 256 000.
      */
     private suspend fun getOrInitEmbeddingInterpreter(): Interpreter = embeddingMutex.withLock {
         embeddingInterpreter?.let { return it }
-        
-        Log.i("MainActivity", "🧠 Loading Embedding Model: assets/models/all-MiniLM-L6-v2.tflite")
+
+        Log.i("MainActivity", "🧠 Loading Embedding Model: assets/models/embeddinggemma-300m.tflite")
         val modelFile = withContext(Dispatchers.IO) {
-            FileUtil.loadMappedFile(this@MainActivity, "models/all-MiniLM-L6-v2.tflite")
+            FileUtil.loadMappedFile(this@MainActivity, "models/embeddinggemma-300m.tflite")
         }
-        
+
         val options = Interpreter.Options().apply {
             setNumThreads(4)
-            // Note: We use CPU for embeddings to avoid GPU context switching with the LLM.
+            // CPU inference — avoids GPU context switching with the primary LLM.
         }
-        
+
         val interpreter = Interpreter(modelFile, options)
         embeddingInterpreter = interpreter
         return interpreter
@@ -289,7 +320,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
         private const val STREAM_CHANNEL         = "com.lmartinez.aitana/aicore_stream"
         private const val GEOFENCE_CHANNEL       = "com.lmartinez.aitana/geofence"
         private const val DEVICE_EVENTS_CHANNEL  = "com.lmartinez.aitana/device_events"
-        private const val NOTIFICATION_MONITOR_CHANNEL = "com.lmartinez.aitana/notification_monitor"
         private const val REQ_FINE_LOCATION       = 1001
         private const val REQ_BACKGROUND_LOCATION = 1002
         private const val REQ_CAMERA_VIDEO        = 1003
@@ -315,13 +345,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                 )
             }
             pendingCameraResult = null
-        }
-
-        contactsPermissionLauncher = registerForActivityResult(
-            ActivityResultContracts.RequestPermission()
-        ) { granted ->
-            pendingContactsPermissionResult?.success(granted)
-            pendingContactsPermissionResult = null
         }
 
         super.onCreate(savedInstanceState)
@@ -378,16 +401,9 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
 
     override fun onStart() {
         super.onStart()
-        AutoPilotStateStore.setFlutterForeground(this, true)
-        AutoPilotStateStore.broadcastStateChanged(this)
     }
 
     override fun onStop() {
-        lifecycleScope.launch(Dispatchers.IO) {
-            releaseFlutterEngineForBackground("onStop")
-            AutoPilotStateStore.setFlutterForeground(applicationContext, false)
-            AutoPilotStateStore.broadcastStateChanged(applicationContext)
-        }
         super.onStop()
     }
 
@@ -419,9 +435,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
             engine?.close()
         } catch (_: Exception) { /* already closed via disposeModel */ }
         engine = null
-        releaseFlutterEngineLease("onDestroy")
-        AutoPilotStateStore.setFlutterForeground(this, false)
-        AutoPilotStateStore.broadcastStateChanged(this)
     }
 
     // ─── Channel Setup ────────────────────────────────────────────────────────
@@ -433,114 +446,7 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
         setupStreamChannel(flutterEngine)
         setupGeofenceChannel(flutterEngine)
         setupDeviceEventsChannel(flutterEngine)
-        setupNotificationMonitorChannel(flutterEngine)
-        AutoPilotCoordinator.attach(flutterEngine, this, this)
     }
-
-    override fun requestContactsPermission(result: MethodChannel.Result) {
-        val permission = android.Manifest.permission.READ_CONTACTS
-        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
-            result.success(true)
-            return
-        }
-
-        if (pendingContactsPermissionResult != null) {
-            result.error("REQUEST_IN_PROGRESS", "Contacts permission request already running.", null)
-            return
-        }
-
-        pendingContactsPermissionResult = result
-        contactsPermissionLauncher.launch(permission)
-    }
-
-    override fun getDeviceContactNames(result: MethodChannel.Result) {
-        val permission = android.Manifest.permission.READ_CONTACTS
-        if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-            result.error("CONTACTS_PERMISSION_DENIED", "READ_CONTACTS has not been granted.", null)
-            return
-        }
-
-        lifecycleScope.launch(Dispatchers.IO) {
-            try {
-                val names = linkedSetOf<String>()
-                val projection = arrayOf(
-                    ContactsContract.Contacts._ID,
-                    ContactsContract.Contacts.DISPLAY_NAME_PRIMARY
-                )
-                val sortOrder = "${ContactsContract.Contacts.DISPLAY_NAME_PRIMARY} COLLATE LOCALIZED ASC"
-
-                contentResolver.query(
-                    ContactsContract.Contacts.CONTENT_URI,
-                    projection,
-                    null,
-                    null,
-                    sortOrder
-                )?.use { cursor ->
-                    val nameIndex = cursor.getColumnIndex(
-                        ContactsContract.Contacts.DISPLAY_NAME_PRIMARY
-                    )
-                    while (cursor.moveToNext()) {
-                        val name = cursor.getString(nameIndex)?.trim()
-                        if (!name.isNullOrEmpty()) {
-                            names.add(name)
-                        }
-                    }
-                }
-
-                withContext(Dispatchers.Main) {
-                    result.success(names.toList())
-                }
-            } catch (e: Exception) {
-                Log.e("AitanaAutoPilot", "Failed to read device contacts.", e)
-                withContext(Dispatchers.Main) {
-                    result.error("CONTACTS_QUERY_FAILED", e.message, null)
-                }
-            }
-        }
-    }
-
-    private fun setupNotificationMonitorChannel(flutterEngine: FlutterEngine) {
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, NOTIFICATION_MONITOR_CHANNEL)
-            .setMethodCallHandler { call, result ->
-                when (call.method) {
-                    "hasNotificationAccess" -> {
-                        result.success(hasNotificationListenerAccess())
-                    }
-
-                    "openNotificationAccessSettings" -> {
-                        openNotificationListenerSettings()
-                        result.success(true)
-                    }
-
-                    else -> result.notImplemented()
-                }
-            }
-    }
-
-    private fun hasNotificationListenerAccess(): Boolean {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-        return notificationManager.isNotificationListenerAccessGranted(notificationListenerComponent())
-    }
-
-    private fun openNotificationListenerSettings() {
-        val detailIntent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS).apply {
-            putExtra(
-                Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME,
-                notificationListenerComponent().flattenToString()
-            )
-        }
-
-        val intent = if (detailIntent.resolveActivity(packageManager) != null) {
-            detailIntent
-        } else {
-            Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
-        }
-
-        startActivity(intent)
-    }
-
-    private fun notificationListenerComponent(): ComponentName =
-        ComponentName(this, AitanaNotificationListenerService::class.java)
 
     private fun setupDeviceEventsChannel(flutterEngine: FlutterEngine) {
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_EVENTS_CHANNEL)
@@ -563,6 +469,9 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                 }
                 override fun onCancel(arguments: Any?) {
                     streamSink = null
+                    Log.i("LiteRT-LM", "EventChannel stream cancelled. Terminating active inference job.")
+                    activeInferenceJob?.cancel()
+                    activeInferenceJob = null
                 }
             })
     }
@@ -613,6 +522,12 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                     result.success(triggeredIds)
                 }
 
+                "getRegisteredGeofences" -> {
+                    val prefs = getSharedPreferences("geofence_titles", Context.MODE_PRIVATE)
+                    val registeredIds = prefs.all.keys.toList()
+                    result.success(registeredIds)
+                }
+
                 "fireSyntheticTrigger" -> {
                     val id = call.argument<String>("id")
                         ?: return@setMethodCallHandler result.error("INVALID_ID", "ID is required", null)
@@ -625,9 +540,10 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
         }
 
         // Register local receiver so GeofenceBroadcastReceiver can relay triggered IDs here.
-        val filter = android.content.IntentFilter(
-            GeofenceBroadcastReceiver.ACTION_GEOFENCE_TRIGGERED
-        )
+        val filter = android.content.IntentFilter().apply {
+            addAction(GeofenceBroadcastReceiver.ACTION_GEOFENCE_TRIGGERED)
+            addAction(GeofenceBroadcastReceiver.ACTION_GEOFENCE_CLEARED)
+        }
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(geofenceTriggeredReceiver, filter, RECEIVER_NOT_EXPORTED)
         } else {
@@ -638,7 +554,7 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
         // Register Wi-Fi Sniper Callback
         try {
             val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-            cm.registerNetworkCallback(wifiNetworkRequest, wifiSniperCallback)
+            cm.registerNetworkCallback(wifiNetworkRequest, wifiSniperCallback, wifiCallbackHandler)
         } catch (e: Exception) {
             Log.e("MainActivity", "Failed to register NetworkCallback: ${e.message}")
         }
@@ -929,7 +845,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                                                 conversation?.close(); conversation = null
                                                 engine?.close();       engine = null
                                                 activeModelBaseName = null
-                                                releaseFlutterEngineLease("hot_swap")
                                                 Log.i(
                                                     "LiteRT-LM",
                                                     "Hot-swap teardown complete — GPU memory freed ✓"
@@ -970,30 +885,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                         }
                     }
 
-                    // ── Check Hands-Free Wake Source ──────────────────────────
-                    "getAitanaConfigPath" -> {
-                        result.success(ModelFileResolver.configFile(this).absolutePath)
-                    }
-
-                    "resolveModelPathForConfig" -> {
-                        val requestedBaseName = call.argument<String>("modelName")
-                            ?: return@setMethodCallHandler result.error(
-                                "MISSING_ARGUMENT",
-                                "resolveModelPathForConfig requires a 'modelName' argument.",
-                                null
-                            )
-
-                        try {
-                            val modelFile = ModelFileResolver.resolveForConfig(
-                                this,
-                                requestedBaseName
-                            )
-                            result.success(modelFile.absolutePath)
-                        } catch (e: Exception) {
-                            result.error("MODEL_NOT_FOUND", e.message, null)
-                        }
-                    }
-
                     "checkWakeSource" -> {
                         result.success(isWokenByNexus)
                         // Clear the flag for future normal launches
@@ -1004,47 +895,49 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                     "generateEmbedding" -> {
                         val text = call.argument<String>("text")
                             ?: return@setMethodCallHandler result.error("MISSING_TEXT", "Text is required", null)
-                        
+
                         lifecycleScope.launch(Dispatchers.Default) {
                             try {
                                 val interpreter = getOrInitEmbeddingInterpreter()
-                                
-                                // Prepare Inputs (Sequence Length: 128)
-                                val maxLength = 128
-                                val inputIds = IntArray(maxLength)
-                                val attentionMask = IntArray(maxLength)
 
-                                // Simple ASCII Tokenizer (Fallback if no full WordPiece is present)
-                                val cleanText = text.lowercase()
-                                val words = cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }
-                                
-                                inputIds[0] = 101 // [CLS]
-                                attentionMask[0] = 1
-                                
+                                // ── Tokenisation: Gemma SentencePiece-compatible stub ────────────
+                                //
+                                // Production: replace with a bundled SentencePiece model.
+                                // Until then, we use a deterministic hash-based mapping
+                                // scaled to Gemma's 256 000-token vocabulary.
+                                //
+                                // Special tokens:
+                                //   BOS (Beginning-of-Sequence) = 2
+                                //   EOS (End-of-Sequence)       = 1
+                                //   PAD                         = 0
+                                val maxLength = 1024
+                                val inputIds  = IntArray(maxLength) // PAD = 0 by default
+
+                                val cleanText = text.lowercase(Locale.ROOT)
+                                val words     = cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }
+
+                                inputIds[0] = 2 // BOS
                                 var currentIdx = 1
+
                                 for (word in words) {
                                     if (currentIdx >= maxLength - 1) break
-                                    // Dummy mapping: In production, load vocab.txt for WordPiece
-                                    inputIds[currentIdx] = (word.hashCode() and 0x7FFFFFFF) % 30000
-                                    attentionMask[currentIdx] = 1
-                                    currentIdx++
+                                    // Deterministic hash -> [3, 255999] (avoids special IDs 0-2)
+                                    val tokenId = ((word.hashCode() and 0x7FFF_FFFF) % 255_997) + 3
+                                    inputIds[currentIdx++] = tokenId
                                 }
-                                inputIds[currentIdx] = 102 // [SEP]
-                                attentionMask[currentIdx] = 1
+                                // EOS marks end of content; remaining slots stay 0 (PAD)
+                                if (currentIdx < maxLength) inputIds[currentIdx] = 1 // EOS
 
-                                // Run Inference
-                                // This specific model expects 2 inputs (ids, mask).
-                                val inputs = arrayOf(
-                                    arrayOf(inputIds),
-                                    arrayOf(attentionMask)
-                                )
-                                
-                                val output = Array(1) { FloatArray(384) }
-                                val outputs = mutableMapOf<Int, Any>(0 to output)
-                                
-                                interpreter.runForMultipleInputsOutputs(inputs, outputs)
-                                
-                                val finalVector = output[0]
+                                // ── Inference ────────────────────────────────────────────────────
+                                //
+                                // embeddinggemma-300m takes ONE input: [1, seqLen] int32
+                                // and produces ONE output: [1, 768] float32.
+                                val inputTensor  = arrayOf(inputIds)        // shape [1, 1024]
+                                val outputTensor = Array(1) { FloatArray(768) }
+
+                                interpreter.run(inputTensor, outputTensor)
+
+                                val finalVector = outputTensor[0]
 
                                 withContext(Dispatchers.Main) {
                                     result.success(finalVector.toList())
@@ -1105,7 +998,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                                                 engine?.close()
                                                 engine = null
                                                 activeModelBaseName = null
-                                                releaseFlutterEngineLease("disposeModel")
                                                 Log.i(
                                                     "LiteRT-LM",
                                                     "Engine and Conversation disposed (3.5GB GPU memory freed) ✓"
@@ -1253,7 +1145,7 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                     "topK=${sampler.topK}, topP=${sampler.topP})"
         )
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        activeInferenceJob = lifecycleScope.launch(Dispatchers.IO) {
             val currentBaseName = activeModelBaseName
             if (currentBaseName == null) {
                 withContext(Dispatchers.Main) {
@@ -1321,7 +1213,7 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                     "topK=${sampler.topK}, topP=${sampler.topP})"
         )
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        activeInferenceJob = lifecycleScope.launch(Dispatchers.IO) {
             val currentBaseName = activeModelBaseName
             if (currentBaseName == null) {
                 withContext(Dispatchers.Main) {
@@ -1403,7 +1295,7 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
                     "topK=${sampler.topK}, topP=${sampler.topP})"
         )
 
-        lifecycleScope.launch(Dispatchers.IO) {
+        activeInferenceJob = lifecycleScope.launch(Dispatchers.IO) {
             val currentBaseName = activeModelBaseName
             if (currentBaseName == null) {
                 withContext(Dispatchers.Main) {
@@ -1841,35 +1733,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
 
     // ─── Engine & Conversation helpers ────────────────────────────────────────
 
-    private suspend fun ensureFlutterEngineLease(): AiEngineLeaseManager.Lease {
-        val currentLease = aiEngineLease
-        if (currentLease != null && currentLease.isValid) {
-            currentLease.heartbeat()
-            return currentLease
-        }
-
-        val acquired = AiEngineLeaseManager.acquireBlocking(
-            this,
-            AutoPilotStateStore.EngineOwner.FLUTTER,
-            timeoutMs = 30_000L
-        ) ?: throw IllegalStateException(
-            "AI engine lease unavailable. Current owner: " +
-                AutoPilotStateStore.engineOwner(this).value
-        )
-
-        aiEngineLease = acquired
-        return acquired
-    }
-
-    private fun releaseFlutterEngineLease(reason: String) {
-        try {
-            aiEngineLease?.close()
-        } finally {
-            aiEngineLease = null
-            Log.i("LiteRT-LM", "Flutter AI engine lease released ($reason).")
-        }
-    }
-
     private fun closeLoadedAiEngine(clearActiveModel: Boolean, reason: String) {
         try {
             conversation?.close()
@@ -1888,36 +1751,17 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
         if (clearActiveModel) {
             activeModelBaseName = null
         }
-
-        releaseFlutterEngineLease(reason)
-    }
-
-    private suspend fun releaseFlutterEngineForBackground(reason: String) {
-        isDisposing = true
-        try {
-            inferenceMutex.withLock {
-                engineMutex.withLock {
-                    conversationMutex.withLock {
-                        closeLoadedAiEngine(clearActiveModel = false, reason = reason)
-                    }
-                }
-            }
-        } finally {
-            isDisposing = false
-        }
     }
 
     @OptIn(ExperimentalApi::class)
     private suspend fun getOrInitEngine(baseName: String): Engine {
         engineMutex.withLock {
             engine?.let {
-                ensureFlutterEngineLease()
                 return it
             }
 
             val modelFile = resolveModelFile(baseName)
             val isVariant = baseName.contains("variant", ignoreCase = true)
-            ensureFlutterEngineLease()
 
             // 1. Conditional MTP: Only enable for the main E4B model.
             ExperimentalFlags.enableSpeculativeDecoding = !isVariant
@@ -1941,7 +1785,6 @@ class MainActivity : FlutterFragmentActivity(), AutoPilotCoordinator.ContactProv
 
             } catch (e: Exception) {
                 Log.e("LiteRT-LM", "Error crítico al inicializar el Engine: ${e.message}")
-                releaseFlutterEngineLease("engine_init_failed")
                 throw e // Re-throw to handle it gracefully in the UI if possible
             }
         }

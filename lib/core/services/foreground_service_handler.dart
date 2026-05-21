@@ -38,6 +38,7 @@ class ForegroundServiceHandler extends TaskHandler {
     debugPrint('🚀 [ForegroundService] isolate started at $timestamp');
     await _initDatabase();
     _updateStatus();
+    await _performReconciliation(sendPort);
   }
 
   Future<void> _initDatabase() async {
@@ -80,33 +81,40 @@ class ForegroundServiceHandler extends TaskHandler {
   @override
   void onRepeatEvent(DateTime timestamp, SendPort? sendPort) async {
     _updateStatus();
-    await _performReconciliation();
+    await _performReconciliation(sendPort);
   }
 
   @override
   void onDestroy(DateTime timestamp, SendPort? sendPort) async {
     debugPrint('🛑 [ForegroundService] isolate destroyed at $timestamp');
+    sendPort?.send({
+      'event': 'surveillanceStopped',
+      'reason': 'foreground task destroyed',
+    });
     _store?.close();
   }
 
   /// @brief Detective Logic: Checks if we are connected to a target SSID and triggers pending geofences.
-  Future<void> _performReconciliation() async {
-    if (_box == null) return;
+  Future<void> _performReconciliation(SendPort? sendPort) async {
+    if (_box == null) {
+      debugPrint(
+        'CRITICAL [ForegroundService] ObjectBox box unavailable. Stopping Surveillance.',
+      );
+      await _stopSurveillance(sendPort, reason: 'objectbox unavailable');
+      return;
+    }
 
     // ── Auto-Shutdown Logic ──────────────────────────────────────────────────
     // Check for remaining PENDING geofences across all locations.
     // If count is 0, we terminate to preserve battery.
-    final pendingCount = _box!
-        .query(GeofenceRecord_.status.equals('PENDING'))
-        .build()
-        .count();
+    final pendingCount = _countPendingGeofences();
 
     if (pendingCount == 0) {
       debugPrint(
         '🟢 [Auto-Shutdown] No pending geofences left. Surveillance terminated to save battery.',
       );
       // We call stopService to ensure the notification disappears and the isolate closes.
-      await ForegroundServiceControl.stopService();
+      await _stopSurveillance(sendPort, reason: 'zero pending geofences');
       return;
     }
 
@@ -120,10 +128,15 @@ class ForegroundServiceHandler extends TaskHandler {
       final lowerSsid = cleanSsid.toLowerCase();
 
       // 2. Fetch all PENDING geofences
-      final allPending = _box!
+      final allPendingQuery = _box!
           .query(GeofenceRecord_.status.equals('PENDING'))
-          .build()
-          .find();
+          .build();
+      late final List<GeofenceRecord> allPending;
+      try {
+        allPending = allPendingQuery.find();
+      } finally {
+        allPendingQuery.close();
+      }
 
       if (allPending.isEmpty) return;
 
@@ -166,6 +179,28 @@ class ForegroundServiceHandler extends TaskHandler {
     }
   }
 
+  int _countPendingGeofences() {
+    final pendingQuery = _box!
+        .query(GeofenceRecord_.status.equals('PENDING'))
+        .build();
+    try {
+      return pendingQuery.count();
+    } finally {
+      pendingQuery.close();
+    }
+  }
+
+  Future<void> _stopSurveillance(
+    SendPort? sendPort, {
+    required String reason,
+  }) async {
+    sendPort?.send({
+      'event': 'surveillanceStopped',
+      'reason': reason,
+    });
+    await ForegroundServiceControl.stopService();
+  }
+
   /// @brief Helper to update the notification with current connectivity status.
   Future<void> _updateStatus() async {
     final String? ssid = await _networkInfo.getWifiName();
@@ -189,6 +224,7 @@ class ForegroundServiceControl {
   static final ValueNotifier<bool> isServiceRunning = ValueNotifier<bool>(
     false,
   );
+  static ReceivePort? _receivePort;
 
   /// @brief Configures the foreground task settings.
   static Future<void> initForegroundTask() async {
@@ -214,13 +250,40 @@ class ForegroundServiceControl {
         allowWifiLock: true,
       ),
     );
+    _registerReceivePort();
+  }
+
+  static Future<bool> refreshServiceState() async {
+    final running = await FlutterForegroundTask.isRunningService;
+    isServiceRunning.value = running;
+    return running;
+  }
+
+  static void _registerReceivePort() {
+    _receivePort?.close();
+    _receivePort = FlutterForegroundTask.receivePort;
+    _receivePort?.listen((data) {
+      if (data is! Map) return;
+
+      switch (data['event']) {
+        case 'surveillanceStopped':
+          isServiceRunning.value = false;
+          break;
+        case 'surveillanceStarted':
+          isServiceRunning.value = true;
+          break;
+      }
+    });
   }
 
   /// @brief Starts the foreground service if not already running.
   static Future<ServiceRequestResult> startService() async {
     if (await FlutterForegroundTask.isRunningService) {
       final result = await FlutterForegroundTask.restartService();
-      if (result.success) isServiceRunning.value = true;
+      if (result.success) {
+        isServiceRunning.value = true;
+        _registerReceivePort();
+      }
       return result;
     } else {
       final result = await FlutterForegroundTask.startService(
@@ -229,7 +292,10 @@ class ForegroundServiceControl {
         notificationIcon: ForegroundServiceHandler._icon,
         callback: startCallback,
       );
-      if (result.success) isServiceRunning.value = true;
+      if (result.success) {
+        isServiceRunning.value = true;
+        _registerReceivePort();
+      }
       return result;
     }
   }

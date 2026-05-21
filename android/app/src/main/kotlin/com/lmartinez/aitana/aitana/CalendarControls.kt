@@ -25,7 +25,7 @@ class CalendarControls(private val channel: MethodChannel) : ToolSet {
         @ToolParam(description = "The action to perform: 'add'.") action: String = "add",
         @ToolParam(description = "A short title for the event.") title: String = "",
         @ToolParam(description = "The date in YYYY-MM-DD format.") date: String = "",
-        @ToolParam(description = "The time in HH:MM format (24-hour). Birthdays MUST use '00:00'. Tasks (no specific time) MUST use '17:00'.") time: String = "17:00",
+        @ToolParam(description = "The time in HH:MM format (24-hour). Birthdays MUST use '00:00'. Standard events use their specific time. Leave empty or ignore ONLY if is_all_day is true.") time: String = "",
         @ToolParam(description = "Minutes before event for notification. Birthdays/Tasks MUST use 60. Standard events default to 0. Use -1 ONLY if explicitly asked for no alarm.") reminder_minutes: Int = 0,
         @ToolParam(description = "Boolean: True if it's a full-day event/task.") is_all_day: Boolean = false,
         @ToolParam(description = "Boolean: True if it's a birthday (will repeat yearly).") is_birthday: Boolean = false

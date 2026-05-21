@@ -32,7 +32,6 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
     await LocalLlmService.setLanguageOverride(
       persona.defaultLang,
       resetContext: false,
-      syncConfig: false,
     );
 
     // MoE Router: auto-load the correct model for this persona's category.
@@ -123,9 +122,6 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
                 );
                 Navigator.pop(ctx);
                 _loadPersonas();
-                await LocalLlmService.syncAutoPilotConfig(
-                  reason: 'persona_prompt_edit',
-                );
               },
               child: const Text(
                 'Save',

@@ -30,16 +30,29 @@ class GeofenceService {
     // Native geofences (Google Play Services) are lost on device reboots.
     // We must re-register all PENDING records from ObjectBox into the OS.
     await _reRegisterPendingGeofences();
+    final pending = _repo.getPendingGeofences();
 
     // If there are still pending geofences, ensure the foreground service is active
-    if (_repo.getPendingGeofences().isNotEmpty) {
+    if (pending.isNotEmpty) {
       debugPrint(
         '🛡️ [GeofenceService] Active geofences detected. Ensuring foreground service is running.',
       );
       await ForegroundServiceControl.startService();
+    } else {
+      await _stopSurveillanceIfNoPending(reason: 'startup reconciliation');
     }
 
     debugPrint('🧹 [GeofenceService] Auto-sweeper finished...');
+  }
+
+  Future<void> _stopSurveillanceIfNoPending({required String reason}) async {
+    if (_repo.getPendingGeofences().isNotEmpty) return;
+
+    await ForegroundServiceControl.refreshServiceState();
+    if (!ForegroundServiceControl.isServiceRunning.value) return;
+
+    debugPrint('No pending geofences after $reason. Stopping Surveillance.');
+    await ForegroundServiceControl.stopService();
   }
 
   /// Restores native monitoring for all geofences that are still PENDING in ObjectBox.
@@ -79,21 +92,37 @@ class GeofenceService {
   /// Synchronizes the geofence state from Kotlin to Dart on startup.
   Future<void> syncGeofenceState() async {
     try {
+      // 1. Sync triggered geofences
       final List<dynamic>? rawIds = await _channel.invokeMethod(
         'getTriggeredGeofences',
       );
-      if (rawIds == null || rawIds.isEmpty) return;
+      final triggeredIds = rawIds?.cast<String>() ?? [];
 
-      final triggeredIds = rawIds.cast<String>();
+      // 2. Sync registered/active geofences from Kotlin
+      final List<dynamic>? rawRegisteredIds = await _channel.invokeMethod(
+        'getRegisteredGeofences',
+      );
 
       final pendingRecords = _repo.getPendingGeofences();
 
       for (final record in pendingRecords) {
-        if (triggeredIds.contains(record.id.toString())) {
+        final recordIdStr = record.id.toString();
+
+        if (triggeredIds.contains(recordIdStr)) {
           _repo.markAsTriggered(record.id);
           debugPrint(
             '🔄 [GeofenceService] Synced record #${record.id} to TRIGGERED from Kotlin state.',
           );
+        } else if (rawRegisteredIds != null) {
+          final registeredIds = rawRegisteredIds.cast<String>();
+          if (!registeredIds.contains(recordIdStr)) {
+            // It is PENDING in Dart, but NOT registered in Kotlin titles map!
+            // This means it was dismissed or exited natively while Dart was offline.
+            _repo.markAsTriggered(record.id);
+            debugPrint(
+              '🔄 [GeofenceService] Synced record #${record.id} to TRIGGERED because it was cleared natively.',
+            );
+          }
         }
       }
     } catch (e) {
@@ -124,9 +153,38 @@ class GeofenceService {
           return;
         }
         final success = _repo.markAsTriggered(id);
+        if (success) {
+          await _stopSurveillanceIfNoPending(reason: 'native trigger');
+        }
         debugPrint(
           success
               ? '✅ [GeofenceService] GeofenceRecord #$id marked as TRIGGERED.'
+              : '⚠️ [GeofenceService] GeofenceRecord #$id not found in DB.',
+        );
+        break;
+
+      case 'onGeofenceCleared':
+        final rawId = call.arguments as String?;
+        if (rawId == null) {
+          debugPrint(
+            '⚠️ [GeofenceService] onGeofenceCleared received null ID.',
+          );
+          return;
+        }
+        final id = int.tryParse(rawId);
+        if (id == null) {
+          debugPrint(
+            '⚠️ [GeofenceService] Invalid cleared ID (not an int): $rawId',
+          );
+          return;
+        }
+        final success = _repo.markAsTriggered(id);
+        if (success) {
+          await _stopSurveillanceIfNoPending(reason: 'native clear');
+        }
+        debugPrint(
+          success
+              ? '✅ [GeofenceService] GeofenceRecord #$id cleared natively, marked as TRIGGERED in DB.'
               : '⚠️ [GeofenceService] GeofenceRecord #$id not found in DB.',
         );
         break;
@@ -279,6 +337,7 @@ class GeofenceService {
 
       // 2. Remove locally from ObjectBox
       _repo.deleteGeofence(id);
+      await _stopSurveillanceIfNoPending(reason: 'manual geofence removal');
 
       debugPrint(
         '🗑️ [GeofenceService] Geofence #$id removed natively and locally.',
@@ -315,6 +374,7 @@ class GeofenceService {
 
       // Wipe the entire ObjectBox table
       _repo.deleteAllGeofences();
+      await _stopSurveillanceIfNoPending(reason: 'manual clear all');
 
       debugPrint(
         '🧹 [GeofenceService] All geofences cleared natively and locally.',

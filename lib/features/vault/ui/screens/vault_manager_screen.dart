@@ -197,7 +197,7 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
                       vertical: 12,
                     ),
                   ),
-                  child: const Text("Analizar"),
+                  child: const Text("Analyze"),
                 );
               },
             ),
@@ -347,12 +347,12 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
                                   final analysis = img.analysisChunks.isNotEmpty
                                       ? img.analysisChunks.first
                                       : null;
-                                  final emoji =
-                                      analysis?.categoryEmoji ?? '📁';
+                                  final emoji = analysis?.categoryEmoji ?? '📁';
                                   final keyword =
                                       analysis?.categoryKeyword ?? 'General';
-                                  final dateStr = DateFormat("MMM ''yy")
-                                      .format(img.uploadDate);
+                                  final dateStr = DateFormat(
+                                    "MMM ''yy",
+                                  ).format(img.uploadDate);
 
                                   return Text(
                                     '$emoji $keyword • $dateStr',
@@ -416,8 +416,9 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
                             final emoji = analysis?.categoryEmoji ?? '📁';
                             final keyword =
                                 analysis?.categoryKeyword ?? 'General';
-                            final dateStr = DateFormat("MMM ''yy")
-                                .format(image.uploadDate);
+                            final dateStr = DateFormat(
+                              "MMM ''yy",
+                            ).format(image.uploadDate);
                             return Text(
                               '$emoji $keyword • $dateStr',
                               style: const TextStyle(
@@ -510,6 +511,8 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
                           ),
                         ),
                       ),
+                      const SizedBox(height: 12),
+                      SizedBox(height: MediaQuery.of(context).padding.bottom),
                     ],
                   ),
                 ),

@@ -1,4 +1,4 @@
-package com.lmartinez.aitana.aitana.autopilot
+package com.lmartinez.aitana.aitana
 
 import android.content.Context
 import android.util.Log
@@ -41,9 +41,6 @@ object ModelFileResolver {
         Log.i(TAG, "Model ownership transfer complete")
         return ownedFile
     }
-
-    fun configFile(context: Context): File =
-        File(context.applicationContext.filesDir, "aitana_config.json")
 
     private fun modelDirectory(context: Context): File =
         context.applicationContext.getExternalFilesDir(null)

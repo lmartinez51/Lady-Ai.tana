@@ -9,9 +9,11 @@ import 'package:aitana/core/constants/native_channels.dart';
 class EmbeddingService {
   static const MethodChannel _channel = MethodChannel(NativeChannels.aiCore);
 
-  /// Generates a 384-dimensional vector for the given [text].
+  /// Generates a 768-dimensional vector for the given [text].
   ///
-  /// Uses the 'all-MiniLM-L6-v2' model (or equivalent) in the native layer.
+  /// Uses the `embeddinggemma-300m` model via the native LiteRT interpreter.
+  /// Returns a zero-filled [Float32List] of length 768 on error to prevent
+  /// a shape mismatch crash at the ObjectBox HNSW insert boundary.
   static Future<Float32List> generateEmbedding(String text) async {
     try {
       final List<dynamic>? result = await _channel.invokeMethod(
@@ -27,7 +29,7 @@ class EmbeddingService {
     } catch (e) {
       debugPrint('🔴 [EmbeddingService] Error: $e');
       // Return an empty vector or handle error as appropriate
-      return Float32List(384);
+      return Float32List(768);
     }
   }
 }

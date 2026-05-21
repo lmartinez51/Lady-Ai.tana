@@ -4,7 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:syncfusion_flutter_pdf/pdf.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/rag/models/legal_document_record.dart';
-import 'package:aitana/features/rag/services/legal_text_chunker.dart';
+import 'package:aitana/features/rag/services/streaming_document_chunker.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 
 class LegalLibraryScreen extends StatefulWidget {
@@ -45,14 +45,28 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
           _isProcessing = true;
         });
 
+        // ── v1.1 Streaming Ingestion (Memory Patch) ──────────────────────────
+        //
+        // Legacy approach loaded the entire PDF into a single `rawText` String,
+        // causing triple allocation peaks (bytes + parsed tree + mega-string).
+        //
+        // New approach:
+        //   1. Load bytes once to open the PdfDocument (unavoidable).
+        //   2. Iterate pages one at a time — only one page's text lives in the
+        //      heap per iteration.
+        //   3. Yield to the Dart event loop after every page via
+        //      `Future.delayed(Duration.zero)` so the GC can reclaim the
+        //      released page string before the next allocation.
+        //   4. Call finalize() only after all pages are consumed.
+        //
         final bytes = await File(filePath).readAsBytes();
         final PdfDocument document = PdfDocument(inputBytes: bytes);
+        final PdfTextExtractor extractor = PdfTextExtractor(document);
+        final int pageCount = document.pages.count;
 
-        final String rawText = PdfTextExtractor(document).extractText();
-        document.dispose();
-
-        if (rawText.trim().isEmpty) {
-          throw Exception('No extractable text found in PDF.');
+        if (pageCount == 0) {
+          document.dispose();
+          throw Exception('PDF has no pages.');
         }
 
         // Resolve the category weight from the stored enum name.
@@ -60,12 +74,31 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
           metadata['category']!,
         );
 
-        final chunks = DocumentChunker.processDocument(
-          fileName,
-          rawText,
-          categoryEnum.name,
+        final chunker = StreamingDocumentChunker(
+          documentName: fileName,
+          category: categoryEnum.name,
           authorityWeight: categoryEnum.weight,
         );
+
+        // Stream pages one at a time.
+        for (int i = 0; i < pageCount; i++) {
+          final pageText = extractor.extractText(
+            startPageIndex: i,
+            endPageIndex: i,
+          );
+          chunker.feedPage(pageText);
+          // pageText is now unreferenced — yield so GC can reclaim it.
+          await Future.delayed(Duration.zero);
+        }
+
+        // Dispose PdfDocument early to free the parsed-PDF memory.
+        document.dispose();
+
+        final chunks = chunker.finalize();
+
+        if (chunks.isEmpty) {
+          throw Exception('No extractable text found in PDF.');
+        }
 
         final docRecord = LegalDocumentRecord(
           title: metadata['title']!,

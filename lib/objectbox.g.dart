@@ -16,7 +16,6 @@ import 'package:objectbox_flutter_libs/objectbox_flutter_libs.dart';
 
 import 'core/domain/entities/chat_session.dart';
 import 'core/domain/entities/geofence_record.dart';
-import 'features/notifications/models/auto_pilot_contact.dart';
 import 'features/rag/models/legal_document_record.dart';
 import 'features/rag/models/legal_knowledge_chunk.dart';
 import 'features/settings/models/persona_record.dart';
@@ -361,7 +360,7 @@ final _entities = <obx_int.ModelEntity>[
         type: 28,
         flags: 8,
         indexId: const obx_int.IdUid(7, 2115479746508382420),
-        hnswParams: obx_int.ModelHnswParams(dimensions: 384),
+        hnswParams: obx_int.ModelHnswParams(dimensions: 768),
       ),
       obx_int.ModelProperty(
         id: const obx_int.IdUid(10, 9018899898178591483),
@@ -426,34 +425,6 @@ final _entities = <obx_int.ModelEntity>[
       ),
     ],
   ),
-  obx_int.ModelEntity(
-    id: const obx_int.IdUid(9, 3825911524217159080),
-    name: 'AutoPilotContact',
-    lastPropertyId: const obx_int.IdUid(3, 8113201492263010425),
-    flags: 0,
-    properties: <obx_int.ModelProperty>[
-      obx_int.ModelProperty(
-        id: const obx_int.IdUid(1, 1496952926625798055),
-        name: 'id',
-        type: 6,
-        flags: 1,
-      ),
-      obx_int.ModelProperty(
-        id: const obx_int.IdUid(2, 8853358312134726331),
-        name: 'contactName',
-        type: 9,
-        flags: 0,
-      ),
-      obx_int.ModelProperty(
-        id: const obx_int.IdUid(3, 8113201492263010425),
-        name: 'isActive',
-        type: 1,
-        flags: 0,
-      ),
-    ],
-    relations: <obx_int.ModelRelation>[],
-    backlinks: <obx_int.ModelBacklink>[],
-  ),
 ];
 
 /// Shortcut for [obx.Store.new] that passes [getObjectBoxModel] and for Flutter
@@ -503,7 +474,7 @@ obx_int.ModelDefinition getObjectBoxModel() {
     lastIndexId: const obx_int.IdUid(7, 2115479746508382420),
     lastRelationId: const obx_int.IdUid(0, 0),
     lastSequenceId: const obx_int.IdUid(0, 0),
-    retiredEntityUids: const [2748509642828762004],
+    retiredEntityUids: const [2748509642828762004, 3825911524217159080],
     retiredIndexUids: const [],
     retiredPropertyUids: const [
       8428613656776927116,
@@ -516,6 +487,9 @@ obx_int.ModelDefinition getObjectBoxModel() {
       5986985217120189751,
       9025568968839982141,
       7069192966358520109,
+      1496952926625798055,
+      8853358312134726331,
+      8113201492263010425,
     ],
     retiredRelationUids: const [],
     modelVersion: 5,
@@ -1043,50 +1017,6 @@ obx_int.ModelDefinition getObjectBoxModel() {
         return object;
       },
     ),
-    AutoPilotContact: obx_int.EntityDefinition<AutoPilotContact>(
-      model: _entities[7],
-      toOneRelations: (AutoPilotContact object) => [],
-      toManyRelations: (AutoPilotContact object) => {},
-      getId: (AutoPilotContact object) => object.id,
-      setId: (AutoPilotContact object, int id) {
-        object.id = id;
-      },
-      objectToFB: (AutoPilotContact object, fb.Builder fbb) {
-        final contactNameOffset = fbb.writeString(object.contactName);
-        fbb.startTable(4);
-        fbb.addInt64(0, object.id);
-        fbb.addOffset(1, contactNameOffset);
-        fbb.addBool(2, object.isActive);
-        fbb.finish(fbb.endTable());
-        return object.id;
-      },
-      objectFromFB: (obx.Store store, ByteData fbData) {
-        final buffer = fb.BufferContext(fbData);
-        final rootOffset = buffer.derefObject(0);
-        final idParam = const fb.Int64Reader().vTableGet(
-          buffer,
-          rootOffset,
-          4,
-          0,
-        );
-        final contactNameParam = const fb.StringReader(
-          asciiOptimization: true,
-        ).vTableGet(buffer, rootOffset, 6, '');
-        final isActiveParam = const fb.BoolReader().vTableGet(
-          buffer,
-          rootOffset,
-          8,
-          false,
-        );
-        final object = AutoPilotContact(
-          id: idParam,
-          contactName: contactNameParam,
-          isActive: isActiveParam,
-        );
-
-        return object;
-      },
-    ),
   };
 
   return obx_int.ModelDefinition(model, bindings);
@@ -1381,22 +1311,4 @@ class PersonalVaultImage_ {
       obx.QueryBacklinkToMany<PersonalVaultAnalysis, PersonalVaultImage>(
         PersonalVaultAnalysis_.parentImage,
       );
-}
-
-/// [AutoPilotContact] entity fields to define ObjectBox queries.
-class AutoPilotContact_ {
-  /// See [AutoPilotContact.id].
-  static final id = obx.QueryIntegerProperty<AutoPilotContact>(
-    _entities[7].properties[0],
-  );
-
-  /// See [AutoPilotContact.contactName].
-  static final contactName = obx.QueryStringProperty<AutoPilotContact>(
-    _entities[7].properties[1],
-  );
-
-  /// See [AutoPilotContact.isActive].
-  static final isActive = obx.QueryBooleanProperty<AutoPilotContact>(
-    _entities[7].properties[2],
-  );
 }

@@ -13,7 +13,6 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - **OOM Blocking Architecture ("The Armor")**: A state-of-the-art UI blocking mechanism that prevents Out of Memory (OOM) crashes by freezing interactions and displaying system lock overlays during high-RAM LLM operations.
 - **Contextual Actions**: Implements a premium, glassmorphic long-press contextual menu for chat messages to facilitate actions like copying text.
 - **Persistent Foreground Services**: Implements a robust background task lifecycle using `flutter_foreground_task` to maintain surveillance capabilities and system-level monitoring even when the app is in the background.
-- **AutoPilot & Intelligent Auto-Reply**: Integrates a native Android `NotificationListenerService` to intercept incoming messages. Uses local LLM inference to generate automated replies for whitelisted contacts, maintaining privacy and offline capability while handling background communication.
 - **Legal RAG (Retrieval-Augmented Generation)**: High-performance offline document library with intelligent PDF extraction and **Strategy-based Semantic Chunking**. Uses a hierarchical authority model and specialized parsers for different legal document types (Laws, Jurisprudence, etc.) to inject context directly into LLM prompts.
 - **Speculative Decoding (MTP)**: Optimized LiteRT inference using Multi-Token Prediction for **Gemma-4-E4B-it** models, significantly reducing latency on supported hardware while maintaining precision.
 - **Persona Management Architecture**: A sophisticated system that allows dynamic switching between distinct AI identities (e.g., Legal Advisor, Technical Architect). Each persona carries its own system prompt, language preferences, and tool access rules.
@@ -33,7 +32,6 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - `lib/features/rag/`: Document ingestion, PDF processing with Syncfusion, and semantic text chunking logic.
 - `lib/features/settings/`: Core persona management and application-wide configuration services.
 - `lib/features/vault/`: Multimodal storage layer, HNSW vector search implementation, and image analysis models.
-- `lib/features/notifications/`: AutoPilot whitelist management and notification interaction UI.
 - `lib/core/theme/`: Shared styling, including the `SystemLockOverlay` ("Armor").
 - `lib/core/constants/`: Centralized native communication channels and shared identifiers.
 - `android/app/src/main/kotlin/...`: Native Android implementation for LiteRT tools, GeofenceBroadcastReceiver, and MethodChannel bridges.

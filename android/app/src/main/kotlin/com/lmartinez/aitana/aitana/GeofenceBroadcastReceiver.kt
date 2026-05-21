@@ -12,7 +12,6 @@ import androidx.core.app.NotificationCompat
 import com.google.android.gms.location.Geofence
 import com.google.android.gms.location.GeofenceStatusCodes
 import com.google.android.gms.location.GeofencingEvent
-import com.google.android.gms.location.LocationServices
 
 /**
  * Silent sentinel that listens for Geofence transitions (ENTER/EXIT/DWELL) triggered by
@@ -23,6 +22,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
     companion object {
         const val ACTION_DISMISS_GEOFENCE   = "com.lmartinez.aitana.ACTION_DISMISS_GEOFENCE"
         const val ACTION_GEOFENCE_TRIGGERED = "com.lmartinez.aitana.ACTION_GEOFENCE_TRIGGERED"
+        const val ACTION_GEOFENCE_CLEARED   = "com.lmartinez.aitana.ACTION_GEOFENCE_CLEARED"
         const val EXTRA_GEOFENCE_ID         = "GEOFENCE_ID"
         const val EXTRA_NOTIF_ID            = "NOTIF_ID"
 
@@ -33,10 +33,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channelId = "aitana_geofence_alerts"
 
-            // Generate a consistent ID so DWELL updates the ENTER notification instead of duplicating
             val notificationId = geofenceId.hashCode()
 
-            // Create the NotificationChannel
             val channel = NotificationChannel(
                 channelId,
                 "Lady AI.tana Location Alerts",
@@ -47,7 +45,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
             notificationManager.createNotificationChannel(channel)
 
-            // Create the intent for the "ALV!" button
             val dismissIntent = Intent(context, GeofenceBroadcastReceiver::class.java).apply {
                 action = ACTION_DISMISS_GEOFENCE
                 putExtra(EXTRA_GEOFENCE_ID, geofenceId)
@@ -55,7 +52,7 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             }
             val dismissPendingIntent = PendingIntent.getBroadcast(
                 context,
-                notificationId, // unique request code
+                notificationId,
                 dismissIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -68,7 +65,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
                 .setDefaults(Notification.DEFAULT_ALL)
                 .setAutoCancel(true)
-                // THE MAGIC BUTTON
                 .addAction(
                     android.R.drawable.ic_menu_close_clear_cancel, 
                     "¡Ya, alv!", 
@@ -84,23 +80,20 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
         Log.d("GeofenceReceiver", "🔥 WAKE UP! onReceive disparado en background!")
         Log.d("GeofenceReceiver", "🔥 Action del Intent: ${intent.action}")
         Log.d("GeofenceReceiver", "🔥 =========================================")
-        // 1. Check if this is a manual button click from our notification
+        
         if (intent.action == ACTION_DISMISS_GEOFENCE) {
             val geofenceId = intent.getStringExtra(EXTRA_GEOFENCE_ID) ?: return
             val notifId = intent.getIntExtra(EXTRA_NOTIF_ID, 0)
             
             Log.d("GeofenceReceiver", "🔘 Botón presionado. Borrando: $geofenceId")
             
-            // Cancel notification
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             nm.cancel(notifId)
             
-            // Execute Kamikaze
-            removeGeofence(context, geofenceId)
+            GeofenceUtils.removeGeofence(context, geofenceId)
             return
         }
 
-        // 2. Otherwise, process it as a Geofencing Event from Play Services
         val geofencingEvent = GeofencingEvent.fromIntent(intent)
 
         if (geofencingEvent == null) {
@@ -131,10 +124,8 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             message = "Pendiente: $taskTitle",
                             geofenceId = geofence.requestId
                         )
-                        // Relay the triggered record ID to MainActivity so it can invoke
-                        // the Dart MethodChannel callback (onGeofenceTriggered).
                         val triggeredIntent = Intent(ACTION_GEOFENCE_TRIGGERED).apply {
-                            setPackage(context.packageName) // explicit package = not a security risk
+                            setPackage(context.packageName)
                             putExtra(EXTRA_GEOFENCE_ID, geofence.requestId)
                         }
                         context.sendBroadcast(triggeredIntent)
@@ -159,8 +150,6 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
                             message = "¿Ya hiciste esto?: $taskTitle",
                             geofenceId = geofence.requestId
                         )
-                        // Relay the triggered record ID to MainActivity so it can invoke
-                        // the Dart MethodChannel callback (onGeofenceTriggered).
                         val triggeredIntent = Intent(ACTION_GEOFENCE_TRIGGERED).apply {
                             setPackage(context.packageName)
                             putExtra(EXTRA_GEOFENCE_ID, geofence.requestId)
@@ -175,36 +164,13 @@ class GeofenceBroadcastReceiver : BroadcastReceiver() {
             Geofence.GEOFENCE_TRANSITION_EXIT -> {
                 geofencingEvent.triggeringGeofences?.forEach { geofence ->
                     Log.d("GeofenceReceiver", "👋 GEOFENCE EXITED. Auto-destrucción iniciada.")
-                    // User left the area naturally, execute kamikaze
-                    removeGeofence(context, geofence.requestId)
+                    GeofenceUtils.removeGeofence(context, geofence.requestId)
                 }
             }
             
             else -> {
                 Log.e("GeofenceReceiver", "Invalid transition type: $geofenceTransition")
             }
-        }
-    }
-
-
-
-    /**
-     * The Kamikaze function: Contacts Play Services to permanently delete the Geofence.
-     */
-    private fun removeGeofence(context: Context, geofenceId: String) {
-        GeofenceUtils.clearTriggeredStateAndSniperMap(context, geofenceId)
-        try {
-            val geofencingClient = LocationServices.getGeofencingClient(context)
-            geofencingClient.removeGeofences(listOf(geofenceId)).run {
-                addOnSuccessListener {
-                    Log.d("GeofenceReceiver", "💀 Kamikaze exitoso: Geocerca '$geofenceId' eliminada de Android.")
-                }
-                addOnFailureListener { exception ->
-                    Log.e("GeofenceReceiver", "🔴 Fallo al eliminar la geocerca: ${exception.message}")
-                }
-            }
-        } catch (e: SecurityException) {
-            Log.e("GeofenceReceiver", "🔴 Security Exception during removal: ${e.message}")
         }
     }
 }
