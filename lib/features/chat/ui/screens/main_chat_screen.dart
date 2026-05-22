@@ -27,7 +27,7 @@ import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
 import 'package:aitana/features/vault/tools/vault_search_tool.dart';
-import 'package:aitana/features/rag/screens/legal_library_screen.dart';
+import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
 
 class MainChatScreen extends StatefulWidget {
   const MainChatScreen({super.key});
@@ -1634,13 +1634,13 @@ class _MainChatScreenState extends State<MainChatScreen>
                               borderRadius: BorderRadius.circular(10),
                             ),
                             child: const Icon(
-                              Icons.local_library_rounded,
+                              Icons.psychology_rounded,
                               color: AppColors.cyberBlue,
                               size: 20,
                             ),
                           ),
                           title: const Text(
-                            'Legal Library',
+                            'Identity Settings',
                             style: TextStyle(
                               color: Colors.white,
                               fontFamily: 'Outfit',
@@ -1648,7 +1648,7 @@ class _MainChatScreenState extends State<MainChatScreen>
                             ),
                           ),
                           subtitle: const Text(
-                            'Manage knowledge base & ingest PDFs',
+                            'Configure AI personalities and prompts',
                             style: TextStyle(
                               color: AppColors.textMedium,
                               fontFamily: 'Outfit',
@@ -1660,7 +1660,7 @@ class _MainChatScreenState extends State<MainChatScreen>
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (_) => const LegalLibraryScreen(),
+                                builder: (_) => const PersonaVaultScreen(),
                               ),
                             );
                           },

@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
-import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
 import 'package:aitana/features/vault/services/batch_ingestion_manager.dart';
 import 'package:aitana/features/vault/ui/screens/vault_manager_screen.dart';
+import 'package:aitana/features/rag/screens/legal_library_screen.dart';
+
 
 
 /// @brief A comprehensive developer toolkit menu.
@@ -88,7 +89,7 @@ class _DevToolsBottomSheetState extends State<DevToolsBottomSheet> {
           ),
           const SizedBox(height: 8),
 
-          // ── Section: System & Surveillance ──────────────────────────────────────
+          // ── Section 1: System & Surveillance ───────────────────────────────────
           _buildSectionHeader('System & Surveillance', Icons.sensors_rounded),
           const SizedBox(height: 16),
           GridView.count(
@@ -105,7 +106,6 @@ class _DevToolsBottomSheetState extends State<DevToolsBottomSheet> {
                 icon: Icons.bug_report_rounded,
                 color: AppColors.cyberBlue,
                 onTap: () {
-                  Navigator.pop(context);
                   showModalBottomSheet(
                     context: context,
                     backgroundColor: Colors.transparent,
@@ -139,29 +139,27 @@ class _DevToolsBottomSheetState extends State<DevToolsBottomSheet> {
                   );
                 },
               ),
+            ],
+          ),
+          const SizedBox(height: 16),
 
-              _DevToolTile(
-                title: 'Personalities Repo',
-                subtitle: 'LLM Identity Injector',
-                icon: Icons.psychology_rounded,
-                color: AppColors.cyberBlue,
-                onTap: () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => const PersonaVaultScreen(),
-                    ),
-                  );
-                },
-              ),
+          // ── Section 2: Knowledge & Memory Core ─────────────────────────────────
+          _buildSectionHeader('Knowledge & Memory Core', Icons.memory_rounded),
+          const SizedBox(height: 16),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            mainAxisSpacing: 16,
+            crossAxisSpacing: 16,
+            childAspectRatio: 1.1,
+            physics: const NeverScrollableScrollPhysics(),
+            children: [
               _DevToolTile(
                 title: 'Personal Vault',
                 subtitle: 'Review Ingested Meta',
                 icon: Icons.security,
                 color: AppColors.cyberBlue,
                 onTap: () {
-                  Navigator.pop(context);
                   Navigator.push(
                     context,
                     MaterialPageRoute(
@@ -174,11 +172,25 @@ class _DevToolsBottomSheetState extends State<DevToolsBottomSheet> {
                   );
                 },
               ),
+              _DevToolTile(
+                title: 'Legal Library',
+                subtitle: 'Manage knowledge base & ingest PDFs',
+                icon: Icons.local_library_rounded,
+                color: AppColors.cyberBlue,
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => const LegalLibraryScreen(),
+                    ),
+                  );
+                },
+              ),
             ],
           ),
           const SizedBox(height: 16),
 
-          // ── Section: Database & Storage Management ────────────────────────
+          // ── Section 3: Storage & Data Hygiene ────────────────────────
           _buildSectionHeader('Storage & Data Hygiene', Icons.storage_rounded),
           const SizedBox(height: 16),
           GridView.count(
