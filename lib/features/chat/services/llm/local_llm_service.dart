@@ -45,7 +45,7 @@ class LocalLlmService {
   /// flag `true` will wait on [_initCompleter] instead of dispatching a
   /// second `invokeMethod('initModel')` to the native layer. Without this
   /// guard, two Dart callers that both see `_isInitialized == false` before
-  /// the first `await` resolves would each trigger a GPU/OpenCL allocation,
+  /// the first `await` resolves would each trigger a native model allocation,
   /// doubling memory pressure and causing the observed Scudo OOM crash.
   static bool _isInitializing = false;
 
@@ -145,18 +145,12 @@ class LocalLlmService {
 
   // ─── System Prompt ────────────────────────────────────────────────────────
 
-  /// Constructs the dynamic system prompt for the current turn.
-  ///
-  /// When [LlmInferenceParams.enableThinking] is `true`, the Gemma 4 native
-  /// reasoning control token `<|think|>` is appended as the **final** content
-  /// of the system instruction string. This activates the model's built-in
-  /// thought channel for the entire session without requiring per-turn prefixes.
-
-  static Future<String> _buildSystemPrompt([
-    String? armedToolHint,
-    String? userMessage,
-    bool isStructuredOutput = false,
-  ]) async {
+  /// Retrieves legal RAG context for this user turn without mutating the
+  /// native system prompt.
+  static Future<String?> _retrieveLegalContextForTurn(
+    String userMessage, {
+    required bool isStructuredOutput,
+  }) async {
     // ── RAG Gatekeeper Pipeline ────────────────────────────────────────────
     String? retrievedLegalContext;
     final activePersona = ObjectBoxService.instance.personaManager
@@ -164,7 +158,6 @@ class LocalLlmService {
 
     if (!isStructuredOutput &&
         activePersona.category == 'LEGAL' &&
-        userMessage != null &&
         userMessage.isNotEmpty) {
       // Gate 0: Is the legal library populated at all?
       if (!ObjectBoxService.instance.hasLegalKnowledge) {
@@ -228,16 +221,31 @@ class LocalLlmService {
       }
     }
 
+    return retrievedLegalContext;
+  }
+
+  /// Constructs the stable native system prompt for the current session.
+  ///
+  /// When [LlmInferenceParams.enableThinking] is `true`, the Gemma 4 native
+  /// reasoning control token `<|think|>` is appended as the **final** content
+  /// of the system instruction string. This activates the model's built-in
+  /// thought channel for the entire session without requiring per-turn prefixes.
+  static Future<String> _buildSystemPrompt({
+    bool isStructuredOutput = false,
+  }) async {
     return PromptManager.buildSystemPrompt(
       modelBaseName: currentModel.value.baseName,
       activeSessionSummary: activeSessionSummary,
-      getTodayEvents: () => CalendarService().getTodayEvents(),
       enableThinking: _currentParams.enableThinking,
       languageCode: currentLanguageNotifier.value,
-      armedToolHint: armedToolHint,
-      retrievedLegalContext: retrievedLegalContext,
       isStructuredOutput: isStructuredOutput,
     );
+  }
+
+  static String _stripSystemHintPrefix(String interceptedPrompt, String? hint) {
+    if (hint == null || hint.isEmpty) return interceptedPrompt;
+    if (!interceptedPrompt.startsWith(hint)) return interceptedPrompt;
+    return interceptedPrompt.substring(hint.length).trimLeft();
   }
 
   /// Encapsulates the state-clearing logic previously used in the UI.
@@ -357,7 +365,7 @@ class LocalLlmService {
 
     // Concurrent-caller path: an initialization is already in-flight.
     // Await its result rather than launching a second native call, which
-    // would allocate GPU/OpenCL memory twice and trigger the Scudo OOM.
+    // would allocate native model memory twice and trigger the Scudo OOM.
     if (_isInitializing) {
       debugPrint(
         '⏳ [LocalLlmService] initModel() called while already initializing – '
@@ -541,7 +549,7 @@ class LocalLlmService {
     }
   }
 
-  /// Shuts down the native LiteRT-LM engine and releases GPU memory.
+  /// Shuts down the native LiteRT-LM engine and releases native model memory.
   ///
   /// Performs a safe, ordered teardown:
   /// 1. Cancels any active [StreamSubscription] so dangling listeners cannot
@@ -614,6 +622,231 @@ class LocalLlmService {
 
   // ─── Core inference ───────────────────────────────────────────────────────
 
+  /// Blocks until Kotlin reports that the native inference coroutine has fully
+  /// unwound and the conversation mutex is available for the next turn.
+  static Future<bool> awaitNativeInferenceIdle({
+    Duration timeout = const Duration(seconds: 30),
+  }) async {
+    try {
+      final idle = await _channel
+          .invokeMethod<bool>('awaitInferenceIdle', {
+            'timeoutMs': timeout.inMilliseconds,
+          })
+          .timeout(
+            timeout + const Duration(seconds: 1),
+            onTimeout: () => false,
+          );
+
+      debugPrint('[LocalLlmService] awaitInferenceIdle -> ${idle == true}');
+      return idle == true;
+    } catch (error) {
+      debugPrint('[LocalLlmService] awaitInferenceIdle failed: $error');
+      return false;
+    }
+  }
+
+  /// Executes the private second turn after a vault tag is intercepted.
+  ///
+  /// This lane intentionally bypasses the public chat input path, the
+  /// IntentInterceptor, and the user-message log. The retrieved database payload
+  /// is injected as system context for the next assistant response only.
+  static Future<String> runHiddenVaultContinuation({
+    required String originalUserPrompt,
+    required String vaultQuery,
+    Function(String)? onTokenUpdate,
+  }) async {
+    debugPrint(
+      '[HiddenToolLane] Preparing vault continuation for query="$vaultQuery".',
+    );
+
+    final nativeIdle = await awaitNativeInferenceIdle();
+    if (!nativeIdle) {
+      return 'No pude terminar la consulta de la boveda porque el motor sigue ocupado.';
+    }
+    debugPrint('[HiddenToolLane] Native idle confirmed; running vault search.');
+
+    final vaultContext = await VaultSearchTool.searchVault(vaultQuery);
+    final slimVaultContext = _slimVaultContextForPrompt(vaultContext);
+    debugPrint(
+      '[HiddenToolLane] Vault context slimmed ${vaultContext.length} -> ${slimVaultContext.length} chars.',
+    );
+
+    return _runNativeHiddenToolContinuation(
+      originalUserPrompt: originalUserPrompt,
+      vaultQuery: vaultQuery,
+      vaultContext: slimVaultContext,
+      onTokenUpdate: onTokenUpdate,
+    );
+  }
+
+  static String _slimVaultContextForPrompt(String vaultContext) {
+    final trimmed = vaultContext.trim();
+    if (trimmed.isEmpty || trimmed.startsWith('Personal Vault:')) {
+      return trimmed;
+    }
+
+    const allowedPrefixes = [
+      'Visual Description:',
+      'Exact OCR Text:',
+      'Exact OCR Text found in image:',
+      'Key Identifiers:',
+    ];
+
+    final slimLines = <String>[];
+    for (final rawLine in trimmed.split('\n')) {
+      final line = rawLine.trim();
+      if (line.isEmpty) continue;
+
+      final keep = allowedPrefixes.any(line.startsWith);
+      if (keep) {
+        slimLines.add(line);
+      }
+    }
+
+    return slimLines.isEmpty ? trimmed : slimLines.join('\n');
+  }
+
+  static Future<String> _runNativeHiddenToolContinuation({
+    required String originalUserPrompt,
+    required String vaultQuery,
+    required String vaultContext,
+    Function(String)? onTokenUpdate,
+  }) async {
+    if (_isGenerating) {
+      debugPrint(
+        '[HiddenToolLane] Hidden continuation ignored: engine already busy.',
+      );
+      return 'Procesando...';
+    }
+
+    ToolParser? toolParser;
+    try {
+      _isGenerating = true;
+      isGeneratingNotifier.value = true;
+
+      final completer = Completer<String>();
+      toolParser = ToolParser();
+
+      _activeSubscription?.cancel();
+      _activeSubscription = _stream.listen(
+        (event) {
+          final token = event as String;
+          if (token == '[DONE]') {
+            _activeSubscription?.cancel();
+            _activeSubscription = null;
+            if (!completer.isCompleted) {
+              completer.complete(toolParser?.getFinalCleanText() ?? '');
+            }
+            return;
+          }
+
+          final uiText = toolParser?.parseToken(token) ?? '';
+          onTokenUpdate?.call(uiText);
+        },
+        onError: (error) {
+          _activeSubscription?.cancel();
+          _activeSubscription = null;
+          if (!completer.isCompleted) completer.completeError(error);
+        },
+        onDone: () {
+          _activeSubscription?.cancel();
+          _activeSubscription = null;
+          if (!completer.isCompleted) {
+            completer.complete(toolParser?.getFinalCleanText() ?? '');
+          }
+        },
+      );
+
+      debugPrint(
+        '[HiddenToolLane] Dispatching native hidden continuation '
+        'query="$vaultQuery" contextChars=${vaultContext.length}.',
+      );
+
+      final guardedInvokeFuture = (() async {
+        try {
+          return await _channel.invokeMethod('sendHiddenToolContinuation', {
+            'original_user_prompt': originalUserPrompt,
+            'tool_query': vaultQuery,
+            'vault_context': vaultContext,
+          });
+        } on PlatformException catch (error) {
+          debugPrint(
+            '[HiddenToolLane] PlatformException in hidden continuation: ${error.message}',
+          );
+          if (!completer.isCompleted) {
+            completer.completeError(error);
+          }
+          return 'platform_error';
+        } catch (error) {
+          debugPrint(
+            '[HiddenToolLane] Unexpected native hidden continuation error: $error',
+          );
+          if (!completer.isCompleted) {
+            completer.completeError(error);
+          }
+          return 'native_error';
+        }
+      })();
+
+      final finalResponse = await completer.future.timeout(
+        const Duration(seconds: 60),
+        onTimeout: () {
+          _activeSubscription?.cancel();
+          final partial = toolParser?.getFinalCleanText() ?? '';
+          return partial.isNotEmpty
+              ? '$partial... [Timeout]'
+              : 'No answer from the engine.';
+        },
+      );
+
+      final nativeResult = await guardedInvokeFuture.timeout(
+        const Duration(seconds: 90),
+        onTimeout: () async {
+          final idle = await awaitNativeInferenceIdle(
+            timeout: const Duration(seconds: 5),
+          );
+          if (idle) {
+            debugPrint(
+              '[HiddenToolLane] Native hidden continuation timeout suppressed; engine is idle.',
+            );
+            return 'hidden_continuation_idle';
+          }
+
+          debugPrint('[HiddenToolLane] Native hidden continuation timeout.');
+          return 'hidden_continuation_timeout';
+        },
+      );
+      debugPrint(
+        '[HiddenToolLane] Native hidden continuation completed: $nativeResult',
+      );
+
+      final cleanResponse = finalResponse.trim().isEmpty
+          ? 'No answer from the engine.'
+          : finalResponse.trim();
+
+      for (final line in cleanResponse.split('\n')) {
+        if (line.trim().isNotEmpty) {
+          debugPrint('💬 [CHAT_LOG] Aitana: $line');
+        }
+      }
+
+      return cleanResponse;
+    } on PlatformException catch (e) {
+      debugPrint(
+        '[HiddenToolLane] Hidden continuation channel error: ${e.message}',
+      );
+      return 'Error: ${e.message}';
+    } catch (e) {
+      debugPrint('[HiddenToolLane] Hidden continuation failed: $e');
+      return 'Error: $e';
+    } finally {
+      toolParser?.disarmParser();
+      _activeSubscription = null;
+      _isGenerating = false;
+      isGeneratingNotifier.value = false;
+    }
+  }
+
   /// Runs a single inference turn against the LiteRT-LM engine.
   ///
   /// Supports three modalities:
@@ -638,6 +871,9 @@ class LocalLlmService {
     /// Fired mid-stream when a vault search request is detected.
     Function(String query)? onVaultSearchDetected,
     bool isStructuredOutput = false,
+    bool applyIntentInterceptor = true,
+    bool enableToolParsing = true,
+    bool suppressUserChatLog = false,
   }) async {
     if (_isGenerating) {
       debugPrint('🟡 [LocalLlmService] Inferencia ignorada: Motor ocupado.');
@@ -665,22 +901,35 @@ class LocalLlmService {
       }
 
       // ── Log the outgoing message ─────────────────────────────────────────
-      if (imagePath != null && imagePath.isNotEmpty) {
-        debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt [🖼️ IMAGEN: $imagePath]');
-      } else if (audioPath != null && audioPath.isNotEmpty) {
-        debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt [🎙️ AUDIO: $audioPath]');
+      if (suppressUserChatLog) {
+        debugPrint(
+          '[HiddenToolLane] Dispatching hidden continuation prompt (${prompt.length} chars).',
+        );
       } else {
-        debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt');
+        if (imagePath != null && imagePath.isNotEmpty) {
+          debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt [🖼️ IMAGEN: $imagePath]');
+        } else if (audioPath != null && audioPath.isNotEmpty) {
+          debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt [🎙️ AUDIO: $audioPath]');
+        } else {
+          debugPrint('💬 [CHAT_LOG] Lorenzo: $prompt');
+        }
       }
       debugPrint('⚙️ [LocalLlmService] Active params: $activeParams');
 
-      final interceptedPrompt = IntentInterceptor.processPrompt(prompt);
+      final interceptedPrompt = applyIntentInterceptor
+          ? IntentInterceptor.processPrompt(prompt)
+          : prompt;
 
       // ── Layer 1 & 2: Gating & Dynamic Injection ─────────────────────────
       String? toolHint;
       final List<String> allowedTags = [];
 
-      if (interceptedPrompt.startsWith('[SYSTEM HINT:')) {
+      // Vault Search is always allowed because the model can invoke it dynamically
+      if (enableToolParsing) {
+        allowedTags.add('<CMD_SYS_VAULT_SRCH:');
+      }
+
+      if (enableToolParsing && interceptedPrompt.startsWith('[SYSTEM HINT:')) {
         final closingBracket = interceptedPrompt.indexOf(']');
         if (closingBracket != -1) {
           toolHint = interceptedPrompt.substring(0, closingBracket + 1);
@@ -697,8 +946,22 @@ class LocalLlmService {
           if (toolHint.contains('manage_calendar')) {
             allowedTags.add('<CMD_SYS_CAL_EVT:');
           }
+          // Vault Search
+          if (toolHint.contains('<CMD_SYS_VAULT_SRCH')) {
+            allowedTags.add('<CMD_SYS_VAULT_SRCH:');
+          }
         }
       }
+      final visibleUserPrompt = _stripSystemHintPrefix(
+        interceptedPrompt,
+        toolHint,
+      );
+      debugPrint(
+        '🧭 [ToolPipeline] toolHint=${toolHint ?? 'none'} | allowedTags=${allowedTags.toSet().join(', ')}',
+      );
+
+      final completer = Completer<String>();
+      var toolInterceptionClosedTurn = false;
 
       toolParser = ToolParser(
         onCommandDetected: onCommandDetected,
@@ -718,16 +981,27 @@ class LocalLlmService {
           );
         },
         onVaultSearchDetected: (query) {
+          toolInterceptionClosedTurn = true;
+          debugPrint(
+            '🔐 [ToolPipeline] Vault tag intercepted; scheduling query="$query" and closing current turn.',
+          );
           onVaultSearchDetected?.call(query);
           debugPrint('🔐 [LocalLlmService] Vault Search invocado: $query');
+          _activeSubscription?.cancel();
+          _activeSubscription = null;
+          if (!completer.isCompleted) {
+            completer.complete(toolParser?.getFinalCleanText() ?? '');
+          }
         },
       );
 
       if (allowedTags.isNotEmpty) {
-        toolParser.armParser(allowedTags);
+        final armedTags = allowedTags.toSet().toList();
+        toolParser.armParser(armedTags);
+        debugPrint(
+          '🧭 [ToolPipeline] ToolParser armed with: ${armedTags.join(', ')}',
+        );
       }
-
-      final completer = Completer<String>();
 
       // ── Dart-side Sliding Window Repetition Guard ────────────────────────
       // Maintains a rolling buffer of the last ~80 tokens (as a joined string).
@@ -798,47 +1072,86 @@ class LocalLlmService {
 
           final uiText = toolParser?.parseToken(token) ?? '';
           onTokenUpdate?.call(uiText);
+
+          // Forcefully terminate this iteration if toolParser triggered a vault search
+          // or another event that cancelled and cleared the subscription
+          if (_activeSubscription == null) {
+            return;
+          }
         },
         onError: (error) {
           _activeSubscription?.cancel();
           _activeSubscription = null;
           if (!completer.isCompleted) completer.completeError(error);
         },
+        onDone: () {
+          _activeSubscription?.cancel();
+          _activeSubscription = null;
+          if (!completer.isCompleted) {
+            completer.complete(toolParser?.getFinalCleanText() ?? '');
+          }
+        },
       );
 
       // ── Dispatch the MethodChannel call for the correct modality ─────────────
+      final retrievedLegalContext = await _retrieveLegalContextForTurn(
+        visibleUserPrompt,
+        isStructuredOutput: isStructuredOutput,
+      );
+      final todayEvents = await CalendarService().getTodayEvents();
+      final nativeTurnPrompt = PromptManager.buildTurnContextEnvelope(
+        visibleUserPrompt: visibleUserPrompt,
+        now: DateTime.now(),
+        todayEvents: todayEvents,
+        armedToolHint: toolHint,
+        retrievedLegalContext: retrievedLegalContext,
+      );
       final systemPrompt = await _buildSystemPrompt(
-        toolHint,
-        prompt,
-        isStructuredOutput,
+        isStructuredOutput: isStructuredOutput,
       );
 
       debugPrint('=== FINAL SYSTEM PROMPT SENT TO KOTLIN ===');
       debugPrint(systemPrompt);
       debugPrint('==========================================');
+      debugPrint(
+        '[LocalLlmService] Native turn envelope chars=${nativeTurnPrompt.length} '
+        'auth=${toolHint == null ? 'NONE' : 'TOOL'}.',
+      );
 
+      final Future<dynamic> invokeFuture;
       if (audioPath != null && audioPath.isNotEmpty) {
         const audioDirective = PromptManager.audioDirective;
-        await _channel.invokeMethod('sendMessageWithAudio', {
+        invokeFuture = _channel.invokeMethod('sendMessageWithAudio', {
           'prompt': audioDirective,
           'system_prompt': systemPrompt,
           'audioPath': audioPath,
           ...activeParams.toMap(),
         });
       } else if (imagePath != null && imagePath.isNotEmpty) {
-        await _channel.invokeMethod('sendMessageWithImage', {
-          'prompt': interceptedPrompt,
+        invokeFuture = _channel.invokeMethod('sendMessageWithImage', {
+          'prompt': nativeTurnPrompt,
           'system_prompt': systemPrompt,
           'imagePath': imagePath,
+          'isStructuredOutput': isStructuredOutput,
           ...activeParams.toMap(),
         });
       } else {
-        await _channel.invokeMethod('sendMessage', {
-          'prompt': interceptedPrompt,
+        invokeFuture = _channel.invokeMethod('sendMessage', {
+          'prompt': nativeTurnPrompt,
           'system_prompt': systemPrompt,
           ...activeParams.toMap(),
         });
       }
+
+      final guardedInvokeFuture = invokeFuture.catchError((error) {
+        debugPrint(
+          '🔴 [LocalLlmService] PlatformException in invokeFuture: $error',
+        );
+        if (!completer.isCompleted) {
+          completer.completeError(error);
+        }
+        return 'platform_error';
+      });
 
       // ── Safety timeout (60 s) ────────────────────────────────────────────
       final finalResponse = await completer.future.timeout(
@@ -851,6 +1164,30 @@ class LocalLlmService {
               : 'Sorry, my processor exceeded the time limit.';
         },
       );
+
+      final nativeInvokeTimeout = toolInterceptionClosedTurn
+          ? const Duration(seconds: 90)
+          : const Duration(seconds: 45);
+      final nativeResult = await guardedInvokeFuture.timeout(
+        nativeInvokeTimeout,
+        onTimeout: () async {
+          final idle = await awaitNativeInferenceIdle(
+            timeout: const Duration(seconds: 5),
+          );
+          if (idle && toolInterceptionClosedTurn) {
+            debugPrint(
+              '[LocalLlmService] Native invoke timeout suppressed; tool turn is already idle.',
+            );
+            return 'tool_interception_idle';
+          }
+
+          debugPrint(
+            '🟡 [LocalLlmService] Native invoke timeout after ${nativeInvokeTimeout.inSeconds}s.',
+          );
+          return 'native_invoke_timeout';
+        },
+      );
+      debugPrint('🧭 [LocalLlmService] Native invoke completed: $nativeResult');
 
       final cleanResponse = finalResponse.trim().isEmpty
           ? (toolParser.startVideoFired

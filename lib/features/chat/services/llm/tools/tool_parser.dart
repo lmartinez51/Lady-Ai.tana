@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart';
+
 /// Handles the mid-stream parsing and interception of special tags
 /// (Gemma thoughts, device commands, tools) during LLM inference.
 class ToolParser {
@@ -20,6 +22,8 @@ class ToolParser {
   bool _startVideoFired = false;
   bool _stopVideoFired = false;
   bool _isArmed = false;
+  bool _vaultPrefixSeen = false;
+  bool _vaultSearchFired = false;
   List<String> _allowedTags = [];
 
   // ─── Sentinel Substrings ──────────────────────────────────────────────────
@@ -29,15 +33,17 @@ class ToolParser {
   static const String startVideoTag = '<CMD_SYS_OPTICS_1>';
   static const String stopVideoTag = '<CMD_SYS_OPTICS_0>';
 
-  static final RegExp geofenceRegex =
-      RegExp(r'<CMD_SYS_LOC_TRG:\s*([^|]+)\s*\|\s*([^>]+)>');
+  static final RegExp geofenceRegex = RegExp(
+    r'<CMD_SYS_LOC_TRG:\s*([^|]+)\s*\|\s*([^>]+)>',
+  );
 
   static final RegExp calendarRegex = RegExp(
     r'<CMD_SYS_CAL_EVT:\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^|]+)\s*\|\s*([^>]+)>',
   );
 
-  static final RegExp vaultSearchRegex =
-      RegExp(r'<CMD_SYS_VAULT_SRCH:\s*([^>]+)>');
+  static final RegExp vaultSearchRegex = RegExp(
+    r'<CMD_SYS_VAULT_SRCH:\s*([^>]+)>',
+  );
 
   ToolParser({
     this.onCommandDetected,
@@ -106,10 +112,16 @@ class ToolParser {
     // ── 2. Device command detection ─────────────────────────────────────────
 
     final String currentClean = cleanBuffer.toString();
+    if (!_vaultPrefixSeen && currentClean.contains('<CMD_SYS_VAULT_SRCH:')) {
+      _vaultPrefixSeen = true;
+      debugPrint('🔎 [ToolParser] Vault command prefix detected in stream.');
+    }
 
     if (currentClean.contains(startVideoTag)) {
       _stripTag(startVideoTag);
-      if (_isArmed && _allowedTags.contains(startVideoTag) && !_startVideoFired) {
+      if (_isArmed &&
+          _allowedTags.contains(startVideoTag) &&
+          !_startVideoFired) {
         _startVideoFired = true;
         onCommandDetected?.call('START_VIDEO');
       }
@@ -146,7 +158,8 @@ class ToolParser {
       if (_isArmed && _allowedTags.contains('<CMD_SYS_CAL_EVT:')) {
         final dateStr = calMatch.group(1)?.trim() ?? '';
         final timeStr = calMatch.group(2)?.trim() ?? '17:00';
-        final isBirthdayStr = calMatch.group(3)?.trim().toLowerCase() ?? 'false';
+        final isBirthdayStr =
+            calMatch.group(3)?.trim().toLowerCase() ?? 'false';
         final titleStr = calMatch.group(4)?.trim() ?? 'Evento';
 
         final isBirthday = isBirthdayStr == 'true';
@@ -169,9 +182,19 @@ class ToolParser {
       final tag = vaultMatch.group(0)!;
       _stripTag(tag);
 
-      if (_isArmed && _allowedTags.contains('<CMD_SYS_VAULT_SRCH:')) {
+      debugPrint('🔎 [ToolParser] Full vault command matched: $tag');
+
+      if (_isArmed &&
+          _allowedTags.contains('<CMD_SYS_VAULT_SRCH:') &&
+          !_vaultSearchFired) {
+        _vaultSearchFired = true;
         final query = vaultMatch.group(1)?.trim() ?? '';
+        debugPrint('🔎 [ToolParser] Vault semantic query extracted: "$query"');
         onVaultSearchDetected?.call(query);
+      } else if (!_isArmed || !_allowedTags.contains('<CMD_SYS_VAULT_SRCH:')) {
+        debugPrint(
+          '🔎 [ToolParser] Vault command ignored because parser is not armed for it.',
+        );
       }
     }
 

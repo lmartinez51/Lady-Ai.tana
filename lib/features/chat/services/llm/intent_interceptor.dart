@@ -129,7 +129,7 @@ class IntentInterceptor {
     // 4. VAULT SEARCH
     if (_vaultRegex.hasMatch(lowerPrompt)) {
       debugPrint('🧠 [IntentInterceptor] Vault match detected.');
-      // NO HINT INJECTED: Native Tool API handles intent.
+      hints.add('USE <CMD_SYS_VAULT_SRCH>');
     }
 
     // 4. GENERAL CHAT (No hints)

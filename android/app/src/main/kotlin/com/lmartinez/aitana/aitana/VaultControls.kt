@@ -1,5 +1,6 @@
 package com.lmartinez.aitana.aitana
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import io.flutter.plugin.common.MethodChannel
@@ -14,7 +15,7 @@ import kotlin.coroutines.resume
  * Bridges the native LiteRT-LM tool-calling API to the Flutter [MethodChannel]
  * so the Gemma model can invoke `search_vault` and receive the result.
  */
-class VaultControls(private val channel: MethodChannel) : ToolSet {
+class VaultControls(private val context: Context, private val channel: MethodChannel) : ToolSet {
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -23,7 +24,7 @@ class VaultControls(private val channel: MethodChannel) : ToolSet {
     )
     fun search_vault(
         @ToolParam(description = "The specific object, item, or topic inferred from the user query. DO NOT ask the user for this; synthesize it yourself (e.g., 'vehicle', 'receipt', 'contract').") keyword: String
-    ): Map<String, Any> {
+    ): String {
 
         android.util.Log.i("LiteRT-LM", "🛠️ Tool triggered: search_vault(keyword=$keyword)")
 
@@ -41,19 +42,13 @@ class VaultControls(private val channel: MethodChannel) : ToolSet {
                         args,
                         object : MethodChannel.Result {
                             override fun success(result: Any?) {
-                                continuation.resume(
-                                    mapOf("status" to "success", "data" to (result?.toString() ?: "No results found."))
-                                )
+                                continuation.resume(result?.toString() ?: "Personal Vault: No records found.")
                             }
                             override fun error(eCode: String, eMsg: String?, eDetails: Any?) {
-                                continuation.resume(
-                                    mapOf("status" to "error", "message" to (eMsg ?: "Unknown error"))
-                                )
+                                continuation.resume("Error searching vault: ${eMsg ?: "Unknown error"}")
                             }
                             override fun notImplemented() {
-                                continuation.resume(
-                                    mapOf("status" to "error", "message" to "Not implemented in Dart.")
-                                )
+                                continuation.resume("Error: Vault search tool not implemented in Dart.")
                             }
                         }
                     )

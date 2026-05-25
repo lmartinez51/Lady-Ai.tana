@@ -26,7 +26,6 @@ import 'package:aitana/core/theme/widgets/system_lock_overlay.dart';
 import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
-import 'package:aitana/features/vault/tools/vault_search_tool.dart';
 import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
 
 class MainChatScreen extends StatefulWidget {
@@ -613,14 +612,57 @@ class _MainChatScreenState extends State<MainChatScreen>
     });
     _scrollToBottom();
 
+    String? pendingVaultQuery;
+
     final response = await LocalLlmService.runInference(
       "Responde a la solicitud de Lorenzo.",
       audioPath: path,
       onTokenUpdate: _handleTokenUpdate,
       onCommandDetected: _handleDeviceCommand,
+      onVaultSearchDetected: (query) {
+        debugPrint(
+          '🔐 [ChatVault] Audio turn requested vault search: "$query"',
+        );
+        pendingVaultQuery = query;
+        debugPrint('🔐 [ChatVault] Audio hidden continuation armed.');
+      },
     );
 
-    _finalizeResponse(response);
+    await _finalizeResponse(response);
+
+    final vaultQuery = pendingVaultQuery;
+    if (vaultQuery != null && mounted) {
+      await _runHiddenVaultContinuation(
+        originalUserPrompt: 'Responde a la solicitud de Lorenzo.',
+        vaultQuery: vaultQuery,
+      );
+    }
+  }
+
+  Future<void> _runHiddenVaultContinuation({
+    required String originalUserPrompt,
+    required String vaultQuery,
+  }) async {
+    if (!mounted) return;
+
+    debugPrint(
+      '[ChatVault] Starting hidden vault continuation for "$vaultQuery".',
+    );
+    _addMessage(ChatMessage(text: "", isUser: false));
+    setState(() {
+      _isLoading = true;
+      _needsSaving = true;
+    });
+    _scrollToBottom();
+
+    final continuation = await LocalLlmService.runHiddenVaultContinuation(
+      originalUserPrompt: originalUserPrompt,
+      vaultQuery: vaultQuery,
+      onTokenUpdate: _handleTokenUpdate,
+    );
+
+    if (!mounted) return;
+    await _finalizeResponse(continuation);
   }
 
   /// Sends a message to the AI.
@@ -756,30 +798,27 @@ class _MainChatScreenState extends State<MainChatScreen>
     }
     // ──────────────────────────────────────────────────────────────────────
 
-    String? pendingVaultResults;
+    String? pendingVaultQuery;
 
     final response = await LocalLlmService.runInference(
       text.isEmpty ? "Describe esto" : text,
       imagePath: imagePath,
       onTokenUpdate: _handleTokenUpdate,
       onCommandDetected: _handleDeviceCommand,
-      onVaultSearchDetected: (query) async {
-        // We capture the results but DO NOT trigger _sendMessage yet.
-        // Triggering it now would fail because the LLM engine is still busy
-        // and the _isLoading flag might block the new turn.
-        pendingVaultResults = await VaultSearchTool.searchVault(query);
+      onVaultSearchDetected: (query) {
+        debugPrint('🔐 [ChatVault] Text turn requested vault search: "$query"');
+        pendingVaultQuery = query;
+        debugPrint('🔐 [ChatVault] Text hidden continuation armed.');
       },
     );
 
-    _finalizeResponse(response);
+    await _finalizeResponse(response);
 
-    // If a vault search was requested during the stream, trigger the second turn
-    // now that the engine is free and the UI is finalized.
-    if (pendingVaultResults != null && mounted) {
-      _sendMessage(
-        autoText:
-            "[VAULT CONTEXT RETRIEVED: $pendingVaultResults]\n"
-            "Responde a Lorenzo usando esta información específica.",
+    final vaultQuery = pendingVaultQuery;
+    if (vaultQuery != null && mounted) {
+      await _runHiddenVaultContinuation(
+        originalUserPrompt: text.isEmpty ? 'Describe esto' : text,
+        vaultQuery: vaultQuery,
       );
     }
   }

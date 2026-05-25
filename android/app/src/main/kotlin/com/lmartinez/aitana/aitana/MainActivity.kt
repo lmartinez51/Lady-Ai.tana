@@ -43,6 +43,7 @@ import java.util.concurrent.TimeUnit
 // Lifecycle-aware coroutines
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -128,6 +129,12 @@ class MainActivity : FlutterFragmentActivity() {
     private var conversation : Conversation? = null
     private var streamSink   : EventChannel.EventSink? = null
     private var activeInferenceJob: kotlinx.coroutines.Job? = null
+    private var activeConversationSystemPromptDigest: String? = null
+    private var activeConversationBaseName: String? = null
+    private enum class InferenceState { IDLE, RUNNING, CANCELLING }
+
+    @Volatile
+    private var inferenceState: InferenceState = InferenceState.IDLE
 
     private val engineMutex       = Mutex()
     private val conversationMutex = Mutex()
@@ -285,34 +292,9 @@ class MainActivity : FlutterFragmentActivity() {
     @Volatile
     private var isDisposing = false
 
-    // 🧠 Pilar 2: El Cerebro Vectorial (Embeddings)
-    private var embeddingInterpreter: Interpreter? = null
-    private val embeddingMutex = Mutex()
-
-    /**
-     * Initialises or returns the cached LiteRT Interpreter for the embedding model.
-     *
-     * Model  : embeddinggemma-300m
-     * Output : 768-dimensional float32 vector (Matryoshka-capable; we use full 768).
-     * Input  : Single tensor [1, seqLen] of int32 token IDs.
-     *          BOS = 2  |  EOS = 1  |  vocab size = 256 000.
-     */
-    private suspend fun getOrInitEmbeddingInterpreter(): Interpreter = embeddingMutex.withLock {
-        embeddingInterpreter?.let { return it }
-
-        Log.i("MainActivity", "🧠 Loading Embedding Model: assets/models/embeddinggemma-300m.tflite")
-        val modelFile = withContext(Dispatchers.IO) {
-            FileUtil.loadMappedFile(this@MainActivity, "models/embeddinggemma-300m.tflite")
-        }
-
-        val options = Interpreter.Options().apply {
-            setNumThreads(4)
-            // CPU inference — avoids GPU context switching with the primary LLM.
-        }
-
-        val interpreter = Interpreter(modelFile, options)
-        embeddingInterpreter = interpreter
-        return interpreter
+    // 🧠 Pilar 2: El Cerebro Vectorial (Embeddings) - Delegates to Companion
+    private suspend fun getOrInitEmbeddingInterpreter(): Interpreter {
+        return Companion.getOrInitEmbeddingInterpreter(this)
     }
 
     companion object {
@@ -325,6 +307,62 @@ class MainActivity : FlutterFragmentActivity() {
         private const val REQ_CAMERA_VIDEO        = 1003
         // Android 13+ (API 33) requires POST_NOTIFICATIONS as a runtime permission
         private const val REQ_NOTIFICATIONS       = 1005
+
+        // Thread-safe, static-ready Embedding Interpreter infrastructure
+        private var embeddingInterpreter: Interpreter? = null
+        private val embeddingMutex = Mutex()
+
+        suspend fun getOrInitEmbeddingInterpreter(context: Context): Interpreter = embeddingMutex.withLock {
+            embeddingInterpreter?.let { return it }
+
+            Log.i("MainActivity", "🧠 Loading Embedding Model: assets/models/embeddinggemma-300m.tflite")
+            val appContext = context.applicationContext
+            val modelFile = withContext(Dispatchers.IO) {
+                FileUtil.loadMappedFile(appContext, "models/embeddinggemma-300m.tflite")
+            }
+
+            val options = Interpreter.Options().apply {
+                setNumThreads(4)
+                // CPU inference; keeps embedding work on the same backend policy as the primary LLM.
+            }
+
+            val interpreter = Interpreter(modelFile, options)
+            embeddingInterpreter = interpreter
+            return interpreter
+        }
+
+        suspend fun generateEmbedding(context: Context, text: String): List<Float> {
+            val interpreter = getOrInitEmbeddingInterpreter(context)
+
+            val maxLength = 1024
+            val inputIds  = IntArray(maxLength) // PAD = 0 by default
+
+            val cleanText = text.lowercase(Locale.ROOT)
+            val words     = cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }
+
+            inputIds[0] = 2 // BOS
+            var currentIdx = 1
+
+            for (word in words) {
+                if (currentIdx >= maxLength - 1) break
+                // Deterministic hash -> [3, 255999] (avoids special IDs 0-2)
+                val tokenId = ((word.hashCode() and 0x7FFF_FFFF) % 255_997) + 3
+                inputIds[currentIdx++] = tokenId
+            }
+            // EOS marks end of content; remaining slots stay 0 (PAD)
+            if (currentIdx < maxLength) inputIds[currentIdx] = 1 // EOS
+
+            // ── Inference ────────────────────────────────────────────────────
+            val inputTensor  = arrayOf(inputIds)        // shape [1, 1024]
+            val outputTensor = Array(1) { FloatArray(768) }
+
+            // Ensure mutual exclusion on the interpreter instance to prevent concurrent access
+            embeddingMutex.withLock {
+                interpreter.run(inputTensor, outputTensor)
+            }
+
+            return outputTensor[0].toList()
+        }
     }
 
     // ─── Lifecycle ────────────────────────────────────────────────────────────
@@ -431,6 +469,8 @@ class MainActivity : FlutterFragmentActivity() {
             conversation?.close()
         } catch (_: Exception) { /* already closed via disposeModel */ }
         conversation = null
+        activeConversationSystemPromptDigest = null
+        activeConversationBaseName = null
         try {
             engine?.close()
         } catch (_: Exception) { /* already closed via disposeModel */ }
@@ -470,10 +510,45 @@ class MainActivity : FlutterFragmentActivity() {
                 override fun onCancel(arguments: Any?) {
                     streamSink = null
                     Log.i("LiteRT-LM", "EventChannel stream cancelled. Terminating active inference job.")
+                    if (isInferenceRunning.get()) {
+                        setInferenceState(InferenceState.CANCELLING, "event_channel_cancel")
+                    }
                     activeInferenceJob?.cancel()
                     activeInferenceJob = null
                 }
             })
+    }
+
+    private fun setInferenceState(state: InferenceState, reason: String) {
+        val previous = inferenceState
+        inferenceState = state
+        Log.i("LiteRT-LM", "Inference state: $previous -> $state ($reason)")
+    }
+
+    private suspend fun waitForInferenceIdle(timeoutMs: Long): Boolean {
+        val startMs = System.currentTimeMillis()
+        while (true) {
+            val jobActive = activeInferenceJob?.isActive == true
+            val running = isInferenceRunning.get()
+            if (!running && !jobActive && inferenceState != InferenceState.IDLE) {
+                setInferenceState(InferenceState.IDLE, "await_idle_reconcile")
+            }
+            val idle = !running && !jobActive && inferenceState == InferenceState.IDLE
+            if (idle) {
+                Log.i("LiteRT-LM", "awaitInferenceIdle -> idle")
+                return true
+            }
+
+            if (System.currentTimeMillis() - startMs >= timeoutMs) {
+                Log.w(
+                    "LiteRT-LM",
+                    "awaitInferenceIdle timeout -> state=$inferenceState, running=$running, jobActive=$jobActive"
+                )
+                return false
+            }
+
+            delay(25)
+        }
     }
 
     private fun setupGeofenceChannel(flutterEngine: FlutterEngine) {
@@ -813,7 +888,7 @@ class MainActivity : FlutterFragmentActivity() {
                             }
 
                             // [3] VALIDATION GATE — confirm the target model exists on
-                            //     disk BEFORE touching the running engine or GPU memory.
+                            //     disk BEFORE touching the running engine memory.
                             //     If the file is absent we abort and keep the current
                             //     model alive so the user is never left without a model.
                             if (!modelExistsOnDisk(requestedBaseName)) {
@@ -843,11 +918,13 @@ class MainActivity : FlutterFragmentActivity() {
                                         conversationMutex.withLock {
                                             try {
                                                 conversation?.close(); conversation = null
+                                                activeConversationSystemPromptDigest = null
+                                                activeConversationBaseName = null
                                                 engine?.close();       engine = null
                                                 activeModelBaseName = null
                                                 Log.i(
                                                     "LiteRT-LM",
-                                                    "Hot-swap teardown complete — GPU memory freed ✓"
+                                                    "Hot-swap teardown complete — native model memory freed ✓"
                                                 )
                                             } catch (e: Exception) {
                                                 Log.e(
@@ -898,49 +975,9 @@ class MainActivity : FlutterFragmentActivity() {
 
                         lifecycleScope.launch(Dispatchers.Default) {
                             try {
-                                val interpreter = getOrInitEmbeddingInterpreter()
-
-                                // ── Tokenisation: Gemma SentencePiece-compatible stub ────────────
-                                //
-                                // Production: replace with a bundled SentencePiece model.
-                                // Until then, we use a deterministic hash-based mapping
-                                // scaled to Gemma's 256 000-token vocabulary.
-                                //
-                                // Special tokens:
-                                //   BOS (Beginning-of-Sequence) = 2
-                                //   EOS (End-of-Sequence)       = 1
-                                //   PAD                         = 0
-                                val maxLength = 1024
-                                val inputIds  = IntArray(maxLength) // PAD = 0 by default
-
-                                val cleanText = text.lowercase(Locale.ROOT)
-                                val words     = cleanText.split(Regex("\\s+")).filter { it.isNotEmpty() }
-
-                                inputIds[0] = 2 // BOS
-                                var currentIdx = 1
-
-                                for (word in words) {
-                                    if (currentIdx >= maxLength - 1) break
-                                    // Deterministic hash -> [3, 255999] (avoids special IDs 0-2)
-                                    val tokenId = ((word.hashCode() and 0x7FFF_FFFF) % 255_997) + 3
-                                    inputIds[currentIdx++] = tokenId
-                                }
-                                // EOS marks end of content; remaining slots stay 0 (PAD)
-                                if (currentIdx < maxLength) inputIds[currentIdx] = 1 // EOS
-
-                                // ── Inference ────────────────────────────────────────────────────
-                                //
-                                // embeddinggemma-300m takes ONE input: [1, seqLen] int32
-                                // and produces ONE output: [1, 768] float32.
-                                val inputTensor  = arrayOf(inputIds)        // shape [1, 1024]
-                                val outputTensor = Array(1) { FloatArray(768) }
-
-                                interpreter.run(inputTensor, outputTensor)
-
-                                val finalVector = outputTensor[0]
-
+                                val finalVector = generateEmbedding(this@MainActivity, text)
                                 withContext(Dispatchers.Main) {
-                                    result.success(finalVector.toList())
+                                    result.success(finalVector)
                                 }
                             } catch (e: Exception) {
                                 Log.e("MainActivity", "❌ Embedding Error: ${e.message}", e)
@@ -968,7 +1005,17 @@ class MainActivity : FlutterFragmentActivity() {
                     }
 
                     // ── Text-only inference ───────────────────────────────────
+                    "awaitInferenceIdle" -> {
+                        val timeoutMs = call.argument<Int>("timeoutMs")?.toLong() ?: 30000L
+                        lifecycleScope.launch(Dispatchers.IO) {
+                            val idle = waitForInferenceIdle(timeoutMs)
+                            withContext(Dispatchers.Main) { result.success(idle) }
+                        }
+                    }
+
                     "sendMessage" -> handleSendMessage(call, result)
+
+                    "sendHiddenToolContinuation" -> handleSendHiddenToolContinuation(call, result)
 
                     "sendOneShotMessage" -> handleSendOneShotMessage(call, result)
 
@@ -978,13 +1025,15 @@ class MainActivity : FlutterFragmentActivity() {
                             conversationMutex.withLock {
                                 conversation?.close()
                                 conversation = null
+                                activeConversationSystemPromptDigest = null
+                                activeConversationBaseName = null
                                 Log.i("LiteRT-LM", "Conversation reset ✓")
                             }
                             withContext(Dispatchers.Main) { result.success("conversation_reset") }
                         }
                     }
 
-                    // ── Complete Engine Disposal (Secure Exit / Release GPU) ──
+                    // ── Complete Engine Disposal (Secure Exit / Release Native Memory) ──
                     "disposeModel" -> {
                         lifecycleScope.launch(Dispatchers.IO) {
                             isDisposing = true
@@ -995,12 +1044,14 @@ class MainActivity : FlutterFragmentActivity() {
                                             try {
                                                 conversation?.close()
                                                 conversation = null
+                                                activeConversationSystemPromptDigest = null
+                                                activeConversationBaseName = null
                                                 engine?.close()
                                                 engine = null
                                                 activeModelBaseName = null
                                                 Log.i(
                                                     "LiteRT-LM",
-                                                    "Engine and Conversation disposed (3.5GB GPU memory freed) ✓"
+                                                    "Engine and Conversation disposed (native model memory freed) ✓"
                                                 )
                                                 withContext(Dispatchers.Main) {
                                                     result.success("model_disposed")
@@ -1089,6 +1140,7 @@ class MainActivity : FlutterFragmentActivity() {
 
             inferenceMutex.withLock {
                 isInferenceRunning.set(true)
+                setInferenceState(InferenceState.RUNNING, "sendOneShotMessage")
                 var tempConversation: Conversation? = null
                 try {
                     val currentEngine = getOrInitEngine(currentBaseName)
@@ -1122,6 +1174,7 @@ class MainActivity : FlutterFragmentActivity() {
                         tempConversation?.close()
                     } catch (_: Exception) {}
                     isInferenceRunning.set(false)
+                    setInferenceState(InferenceState.IDLE, "sendOneShotMessage_finally")
                 }
             }
         }
@@ -1163,6 +1216,7 @@ class MainActivity : FlutterFragmentActivity() {
 
             inferenceMutex.withLock {
                 isInferenceRunning.set(true)
+                setInferenceState(InferenceState.RUNNING, "sendMessage")
                 try {
                     val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
 
@@ -1183,12 +1237,122 @@ class MainActivity : FlutterFragmentActivity() {
                         streamSink?.success("[DONE]")
                         result.success("ok")
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    setInferenceState(InferenceState.CANCELLING, "sendMessage_cancelled")
+                    withContext(Dispatchers.Main) {
+                        result.success("cancelled")
+                    }
+                    throw e
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         result.error("LLM_INFERENCE_ERROR", e.message, null)
                     }
                 } finally {
                     isInferenceRunning.set(false)
+                    setInferenceState(InferenceState.IDLE, "sendMessage_finally")
+                }
+            }
+        }
+    }
+
+    private fun handleSendHiddenToolContinuation(call: MethodCall, result: MethodChannel.Result) {
+        val originalUserPrompt = call.argument<String>("original_user_prompt") ?: ""
+        val toolQuery          = call.argument<String>("tool_query")           ?: ""
+        val vaultContext       = call.argument<String>("vault_context")        ?: ""
+
+        val hiddenPrompt = """
+            [INTERNAL TOOL CONTEXT - NOT USER TEXT]
+            This message is private runtime context. It was produced by the Personal Vault search tool and must not be described as a Lorenzo message.
+
+            Original Lorenzo request:
+            $originalUserPrompt
+
+            Vault search query:
+            $toolQuery
+
+            Retrieved vault facts:
+            $vaultContext
+
+            Answer Lorenzo directly using these facts. Do not mention tools, tags, ObjectBox, hidden context, prompts, or internal runtime details. Do not emit any CMD_SYS tag.
+        """.trimIndent()
+
+        Log.d(
+            "LiteRT-LM",
+            "sendHiddenToolContinuation -> reusing active Conversation, " +
+                    "contextChars=${vaultContext.length}, query=\"$toolQuery\""
+        )
+
+        activeInferenceJob = lifecycleScope.launch(Dispatchers.IO) {
+            if (vaultContext.isBlank()) {
+                withContext(Dispatchers.Main) {
+                    result.error("INVALID_HIDDEN_CONTEXT", "vault_context must not be empty.", null)
+                }
+                return@launch
+            }
+
+            if (activeModelBaseName == null) {
+                withContext(Dispatchers.Main) {
+                    result.error("NO_MODEL_LOADED", "No active model is loaded.", null)
+                }
+                return@launch
+            }
+
+            if (isInferenceRunning.get()) {
+                withContext(Dispatchers.Main) {
+                    result.error("BUSY", "Inference already running.", null)
+                }
+                return@launch
+            }
+
+            inferenceMutex.withLock {
+                isInferenceRunning.set(true)
+                setInferenceState(InferenceState.RUNNING, "sendHiddenToolContinuation")
+                try {
+                    val conv = conversationMutex.withLock {
+                        conversation
+                    }
+
+                    if (conv == null) {
+                        withContext(Dispatchers.Main) {
+                            result.error(
+                                "NO_ACTIVE_CONVERSATION",
+                                "Hidden continuation requires an existing conversation.",
+                                null
+                            )
+                        }
+                    } else {
+                        conv.sendMessageAsync(hiddenPrompt)
+                            .catch { e ->
+                                withContext(Dispatchers.Main) {
+                                    streamSink?.error("STREAM_ERROR", e.message, null)
+                                }
+                                throw e
+                            }
+                            .collect { message ->
+                                if (isDisposing) return@collect
+                                withContext(Dispatchers.Main) {
+                                    streamSink?.success(message.toString())
+                                }
+                            }
+
+                        withContext(Dispatchers.Main) {
+                            streamSink?.success("[DONE]")
+                            result.success("ok")
+                        }
+                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    setInferenceState(InferenceState.CANCELLING, "sendHiddenToolContinuation_cancelled")
+                    withContext(Dispatchers.Main) {
+                        result.success("cancelled")
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    withContext(Dispatchers.Main) {
+                        result.error("LLM_HIDDEN_TOOL_ERROR", e.message, null)
+                    }
+                } finally {
+                    isInferenceRunning.set(false)
+                    setInferenceState(InferenceState.IDLE, "sendHiddenToolContinuation_finally")
                 }
             }
         }
@@ -1239,6 +1403,7 @@ class MainActivity : FlutterFragmentActivity() {
 
             inferenceMutex.withLock {
                 isInferenceRunning.set(true)
+                setInferenceState(InferenceState.RUNNING, "sendMessageWithImage")
                 try {
                     val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
 
@@ -1264,12 +1429,19 @@ class MainActivity : FlutterFragmentActivity() {
                         streamSink?.success("[DONE]")
                         result.success("ok")
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    setInferenceState(InferenceState.CANCELLING, "sendMessageWithImage_cancelled")
+                    withContext(Dispatchers.Main) {
+                        result.success("cancelled")
+                    }
+                    throw e
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         result.error("LLM_VISION_ERROR", e.message, null)
                     }
                 } finally {
                     isInferenceRunning.set(false)
+                    setInferenceState(InferenceState.IDLE, "sendMessageWithImage_finally")
                 }
             }
         }
@@ -1321,6 +1493,7 @@ class MainActivity : FlutterFragmentActivity() {
 
             inferenceMutex.withLock {
                 isInferenceRunning.set(true)
+                setInferenceState(InferenceState.RUNNING, "sendMessageWithAudio")
                 try {
                     val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
 
@@ -1347,12 +1520,19 @@ class MainActivity : FlutterFragmentActivity() {
                         streamSink?.success("[DONE]")
                         result.success("ok")
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    setInferenceState(InferenceState.CANCELLING, "sendMessageWithAudio_cancelled")
+                    withContext(Dispatchers.Main) {
+                        result.success("cancelled")
+                    }
+                    throw e
                 } catch (e: Exception) {
                     withContext(Dispatchers.Main) {
                         result.error("LLM_AUDIO_ERROR", e.message, null)
                     }
                 } finally {
                     isInferenceRunning.set(false)
+                    setInferenceState(InferenceState.IDLE, "sendMessageWithAudio_finally")
                 }
             }
         }
@@ -1740,6 +1920,8 @@ class MainActivity : FlutterFragmentActivity() {
             Log.w("LiteRT-LM", "Conversation close failed during $reason: ${e.message}")
         }
         conversation = null
+        activeConversationSystemPromptDigest = null
+        activeConversationBaseName = null
 
         try {
             engine?.close()
@@ -1796,7 +1978,35 @@ class MainActivity : FlutterFragmentActivity() {
         baseName: String
     ): Conversation {
         conversationMutex.withLock {
-            conversation?.let { return it }
+            val incomingDigest = sha256Digest(systemInstructionText)
+            conversation?.let { existing ->
+                val promptChanged = activeConversationSystemPromptDigest != incomingDigest
+                val modelChanged = activeConversationBaseName != baseName
+
+                if (!promptChanged && !modelChanged) {
+                    Log.i(
+                        "LiteRT-LM",
+                        "Conversation reuse -> promptDigest=${incomingDigest.take(12)}, model=$baseName"
+                    )
+                    return existing
+                }
+
+                Log.i(
+                    "LiteRT-LM",
+                    "Conversation refresh -> promptChanged=$promptChanged, " +
+                            "modelChanged=$modelChanged, " +
+                            "oldPrompt=${activeConversationSystemPromptDigest?.take(12)}, " +
+                            "newPrompt=${incomingDigest.take(12)}, model=$baseName"
+                )
+                try {
+                    existing.close()
+                } catch (e: Exception) {
+                    Log.w("LiteRT-LM", "Conversation close before refresh failed: ${e.message}")
+                }
+                conversation = null
+                activeConversationSystemPromptDigest = null
+                activeConversationBaseName = null
+            }
 
             val currentEngine = getOrInitEngine(baseName)
 
@@ -1806,7 +2016,7 @@ class MainActivity : FlutterFragmentActivity() {
             val config = ConversationConfig(
                 systemInstruction = Contents.of(systemInstructionText),
                 samplerConfig     = samplerConfig,
-                tools             = listOf(tool(CalendarControls(methodChannel)), tool(VaultControls(methodChannel)))
+                tools             = listOf(tool(CalendarControls(methodChannel)))
             )
 
             Log.i(
@@ -1817,11 +2027,32 @@ class MainActivity : FlutterFragmentActivity() {
                         "topP=${samplerConfig.topP})"
             )
 
-            return currentEngine.createConversation(config).also { conversation = it }
+            Log.i(
+                "LiteRT-LM",
+                "New Conversation context -> promptDigest=${incomingDigest.take(12)}, model=$baseName"
+            )
+
+            return currentEngine.createConversation(config).also {
+                conversation = it
+                activeConversationSystemPromptDigest = incomingDigest
+                activeConversationBaseName = baseName
+            }
         }
     }
 
+    private fun sha256Digest(value: String): String {
+        val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+        return bytes.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
     private fun extractSamplerConfig(call: MethodCall): SamplerConfig {
+        if (call.argument<Boolean>("isStructuredOutput") == true) {
+            return SamplerConfig(
+                topK        = 5,
+                topP        = 0.40,
+                temperature = 0.10
+            )
+        }
         val temperature = call.argument<Double>("temperature")
             ?: currentSamplerConfig.temperature
         val topK = call.argument<Int>("top_k")
