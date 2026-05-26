@@ -1,9 +1,11 @@
 import 'dart:io';
 import 'dart:async';
+import 'dart:ui';
 import 'package:aitana/core/domain/entities/chat_session.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:flutter/cupertino.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
@@ -25,8 +27,17 @@ import 'package:aitana/features/chat/ui/widgets/voice_input_panel.dart';
 import 'package:aitana/core/theme/widgets/system_lock_overlay.dart';
 import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/features/chat/ui/widgets/chat_header_widget.dart';
+import 'package:aitana/features/rag/screens/legal_library_screen.dart';
 import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
+import 'package:aitana/features/vault/ui/screens/vault_manager_screen.dart';
 import 'package:aitana/features/developer/screens/persona_vault_screen.dart';
+
+const Color _kChatObsidian = Color(0xFF0B0D17);
+const Color _kLorenzoBubbleColor = Color(0xFF102A33);
+
+enum _VaultContinuationState { idle, queued, retrieving }
+
+enum _AttachmentMenuAction { camera, gallery, legalLibrary, personalVault }
 
 class MainChatScreen extends StatefulWidget {
   const MainChatScreen({super.key});
@@ -37,6 +48,11 @@ class MainChatScreen extends StatefulWidget {
 
 class _MainChatScreenState extends State<MainChatScreen>
     with WidgetsBindingObserver {
+  static const double _chatHeaderBodyHeight = 60.0;
+  static const double _inputFooterMinHeight = 76.0;
+  static const double _inputFooterMaxHeight = 244.0;
+  static const Color _userBubbleColor = _kLorenzoBubbleColor;
+
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   final GlobalKey<VoiceInputPanelState> _voiceKey =
       GlobalKey<VoiceInputPanelState>();
@@ -44,7 +60,12 @@ class _MainChatScreenState extends State<MainChatScreen>
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final FocusNode _focusNode = FocusNode();
-
+  Timer? _autoScrollThrottle;
+  bool _forceNextAutoScroll = false;
+  final LayerLink _attachmentMenuLayerLink = LayerLink();
+  final ValueNotifier<bool> _attachmentMenuOpenNotifier = ValueNotifier(false);
+  OverlayEntry? _attachmentMenuOverlayEntry;
+  Timer? _attachmentMenuRemovalTimer;
   final ImagePicker _picker = ImagePicker();
 
   final ValueNotifier<List<ChatMessage>> _messagesNotifier = ValueNotifier([]);
@@ -67,6 +88,10 @@ class _MainChatScreenState extends State<MainChatScreen>
   // ValueNotifier instead of a plain bool so typing never triggers a
   // full setState / rebuild of the TextField's RenderEditable subtree.
   final ValueNotifier<bool> _isTypingNotifier = ValueNotifier(false);
+  final ValueNotifier<bool> _isWaitingForFirstToken = ValueNotifier(false);
+  final ValueNotifier<_VaultContinuationState> _vaultContinuationState =
+      ValueNotifier(_VaultContinuationState.idle);
+  final ValueNotifier<bool> _tickerModeNotifier = ValueNotifier(true);
   String? _selectedImagePath;
 
   // ─── Historial y Sesiones ──────────────────────────────────────────────────
@@ -157,7 +182,16 @@ class _MainChatScreenState extends State<MainChatScreen>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _attachmentMenuRemovalTimer?.cancel();
+    _attachmentMenuOverlayEntry?.remove();
+    _attachmentMenuOverlayEntry = null;
+    _messagesNotifier.dispose();
     _isTypingNotifier.dispose();
+    _isWaitingForFirstToken.dispose();
+    _vaultContinuationState.dispose();
+    _attachmentMenuOpenNotifier.dispose();
+    _tickerModeNotifier.dispose();
+    _autoScrollThrottle?.cancel();
     _textController.dispose();
     _scrollController.dispose();
     _focusNode.dispose();
@@ -171,11 +205,16 @@ class _MainChatScreenState extends State<MainChatScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed) {
+      _tickerModeNotifier.value = true;
       _checkForNexusWakeOnResume();
     } else if (state == AppLifecycleState.paused) {
+      _tickerModeNotifier.value = false;
       // Re-arm the one-shot guard so the next foreground-resume cycle
       // can fire the auto-greeting again if the Nexus wake flag is set.
       _hasFiredAutoGreeting = false;
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.detached) {
+      _tickerModeNotifier.value = false;
     }
   }
 
@@ -245,18 +284,36 @@ class _MainChatScreenState extends State<MainChatScreen>
     );
   }
 
-  void _scrollToBottom() {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollController.hasClients) {
+  bool _isNearChatBottom() {
+    if (!_scrollController.hasClients) return true;
+    final position = _scrollController.position;
+    return position.pixels <= position.minScrollExtent + 96;
+  }
+
+  void _scrollToBottom({bool force = false}) {
+    _forceNextAutoScroll = _forceNextAutoScroll || force;
+    if (_autoScrollThrottle?.isActive ?? false) return;
+
+    _autoScrollThrottle = Timer(const Duration(milliseconds: 72), () {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || !_scrollController.hasClients) {
+          _forceNextAutoScroll = false;
+          return;
+        }
+
+        final forceScroll = _forceNextAutoScroll;
+        _forceNextAutoScroll = false;
+        if (!forceScroll && !_isNearChatBottom()) return;
+
         // With reverse: true on the ListView, the newest message lives at
-        // scroll position 0.0 (minScrollExtent), not maxScrollExtent.
-        // Animating to 0.0 brings the latest bubble into view.
+        // minScrollExtent. Animating there keeps the active response in view
+        // without pulling the user back if they intentionally scroll upward.
         _scrollController.animateTo(
-          0.0,
-          duration: const Duration(milliseconds: 300),
-          curve: Curves.easeOut,
+          _scrollController.position.minScrollExtent,
+          duration: const Duration(milliseconds: 220),
+          curve: Curves.easeOutCubic,
         );
-      }
+      });
     });
   }
 
@@ -513,85 +570,101 @@ class _MainChatScreenState extends State<MainChatScreen>
     );
   }
 
-  /// Shows the attachment options bottom sheet.
-  /// Allows the user to select camera or gallery as the source for an image.
-  ///
-  /// The bottom sheet includes two options:
-  /// - Camera: Launches the camera to take a photo
-  /// - Gallery: Opens the image gallery to select an existing photo
-  ///
-  /// This method is called when the user taps the attachment button in the chat input.
-  void _showAttachmentOptions() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppColors.deepIndigo,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        return SafeArea(
-          child: Wrap(
-            children: [
-              ListTile(
-                leading: const Icon(
-                  Icons.camera_alt,
-                  color: AppColors.cyberBlue,
-                ),
-                title: const Text(
-                  'Camera',
-                  style: TextStyle(color: Colors.white, fontFamily: 'Outfit'),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.camera);
-                },
-              ),
-              ListTile(
-                leading: const Icon(
-                  Icons.photo_library,
-                  color: AppColors.cyberBlue,
-                ),
-                title: const Text(
-                  'Gallery',
-                  style: TextStyle(color: Colors.white, fontFamily: 'Outfit'),
-                ),
-                onTap: () {
-                  Navigator.pop(context);
-                  _pickImage(ImageSource.gallery);
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
+  void _toggleAttachmentMenu() {
+    if (_attachmentMenuOpenNotifier.value) {
+      _hideAttachmentMenu();
+    } else {
+      _showAttachmentMenu();
+    }
   }
 
-  /// Picks an image from the gallery or camera.
-  ///
-  /// [source]: The source to pick the image from (gallery or camera).
-  ///
-  /// Uses [ImagePicker] to select an image with 80% quality.
-  /// Updates the [_selectedImagePath] state when an image is successfully selected.
-  ///
-  /// This method is called by [_showAttachmentOptions] when the user selects
-  /// either "Camera" or "Gallery".
-  ///
-  /// Throws [Exception] if image picking fails.
-  /// Logs the error to the debug console.
+  void _showAttachmentMenu() {
+    if (!mounted) return;
+
+    _attachmentMenuRemovalTimer?.cancel();
+    if (_attachmentMenuOverlayEntry == null) {
+      final overlay = Overlay.maybeOf(context);
+      if (overlay == null) return;
+
+      _attachmentMenuOverlayEntry = OverlayEntry(
+        builder: (context) {
+          return ValueListenableBuilder<bool>(
+            valueListenable: _tickerModeNotifier,
+            child: _AttachmentMenuOverlay(
+              layerLink: _attachmentMenuLayerLink,
+              isOpenListenable: _attachmentMenuOpenNotifier,
+              onDismiss: _hideAttachmentMenu,
+              onSelected: _handleAttachmentMenuAction,
+            ),
+            builder: (context, tickerModeEnabled, child) {
+              return TickerMode(enabled: tickerModeEnabled, child: child!);
+            },
+          );
+        },
+      );
+      overlay.insert(_attachmentMenuOverlayEntry!);
+    }
+
+    _attachmentMenuOpenNotifier.value = true;
+  }
+
+  void _hideAttachmentMenu({bool immediately = false}) {
+    _attachmentMenuRemovalTimer?.cancel();
+    if (_attachmentMenuOverlayEntry == null) {
+      _attachmentMenuOpenNotifier.value = false;
+      return;
+    }
+
+    _attachmentMenuOpenNotifier.value = false;
+    if (immediately) {
+      _attachmentMenuOverlayEntry?.remove();
+      _attachmentMenuOverlayEntry = null;
+      return;
+    }
+
+    _attachmentMenuRemovalTimer = Timer(const Duration(milliseconds: 180), () {
+      _attachmentMenuOverlayEntry?.remove();
+      _attachmentMenuOverlayEntry = null;
+    });
+  }
+
+  void _handleAttachmentMenuAction(_AttachmentMenuAction action) {
+    switch (action) {
+      case _AttachmentMenuAction.camera:
+        _hideAttachmentMenu(immediately: true);
+        unawaited(_pickImage(ImageSource.camera));
+        break;
+      case _AttachmentMenuAction.gallery:
+        _hideAttachmentMenu(immediately: true);
+        unawaited(_pickImage(ImageSource.gallery));
+        break;
+      case _AttachmentMenuAction.legalLibrary:
+        debugPrint('[AttachmentMenu] Legal Library selected');
+        _hideAttachmentMenu(immediately: true);
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const LegalLibraryScreen()));
+        break;
+      case _AttachmentMenuAction.personalVault:
+        debugPrint('[AttachmentMenu] Personal Vault selected');
+        _hideAttachmentMenu(immediately: true);
+        Navigator.of(
+          context,
+        ).push(MaterialPageRoute(builder: (_) => const VaultManagerScreen()));
+        break;
+    }
+  }
+
   Future<void> _pickImage(ImageSource source) async {
     try {
-      final XFile? image = await _picker.pickImage(
-        source: source,
-        imageQuality: 80,
-      );
-      if (image != null) {
-        setState(() {
-          _selectedImagePath = image.path;
-        });
-      }
+      final image = await _picker.pickImage(source: source, imageQuality: 80);
+      if (!mounted || image == null) return;
+
+      setState(() {
+        _selectedImagePath = image.path;
+      });
     } catch (e) {
-      debugPrint("Error picking image: $e");
+      debugPrint('Error picking image: $e');
     }
   }
 
@@ -610,7 +683,8 @@ class _MainChatScreenState extends State<MainChatScreen>
       _isLoading = true;
       _needsSaving = true;
     });
-    _scrollToBottom();
+    _scrollToBottom(force: true);
+    _isWaitingForFirstToken.value = true;
 
     String? pendingVaultQuery;
 
@@ -623,6 +697,9 @@ class _MainChatScreenState extends State<MainChatScreen>
         debugPrint(
           '🔐 [ChatVault] Audio turn requested vault search: "$query"',
         );
+        if (mounted) {
+          _vaultContinuationState.value = _VaultContinuationState.queued;
+        }
         pendingVaultQuery = query;
         debugPrint('🔐 [ChatVault] Audio hidden continuation armed.');
       },
@@ -648,21 +725,28 @@ class _MainChatScreenState extends State<MainChatScreen>
     debugPrint(
       '[ChatVault] Starting hidden vault continuation for "$vaultQuery".',
     );
+    _vaultContinuationState.value = _VaultContinuationState.retrieving;
     _addMessage(ChatMessage(text: "", isUser: false));
     setState(() {
       _isLoading = true;
       _needsSaving = true;
     });
-    _scrollToBottom();
+    _scrollToBottom(force: true);
 
-    final continuation = await LocalLlmService.runHiddenVaultContinuation(
-      originalUserPrompt: originalUserPrompt,
-      vaultQuery: vaultQuery,
-      onTokenUpdate: _handleTokenUpdate,
-    );
+    try {
+      final continuation = await LocalLlmService.runHiddenVaultContinuation(
+        originalUserPrompt: originalUserPrompt,
+        vaultQuery: vaultQuery,
+        onTokenUpdate: _handleTokenUpdate,
+      );
 
-    if (!mounted) return;
-    await _finalizeResponse(continuation);
+      if (!mounted) return;
+      await _finalizeResponse(continuation);
+    } finally {
+      if (mounted) {
+        _vaultContinuationState.value = _VaultContinuationState.idle;
+      }
+    }
   }
 
   /// Sends a message to the AI.
@@ -725,7 +809,7 @@ class _MainChatScreenState extends State<MainChatScreen>
       setState(() {
         _isLoading = true;
       });
-      _scrollToBottom();
+      _scrollToBottom(force: true);
 
       // 4. Execute the Vault Ingestion pipeline (Deduplication -> Sandbox -> Vision -> Save)
       final result = await VaultIngestionService().ingestImage(imagePath);
@@ -771,7 +855,7 @@ class _MainChatScreenState extends State<MainChatScreen>
       _needsSaving = true; // 👈 ¡NUESTRA BANDERA DE GUARDADO!
     });
 
-    _scrollToBottom();
+    _scrollToBottom(force: true);
 
     // ── Persona-Aware Inference Parameters ────────────────────────────────
     if (activePersona.category != _lastPersonaCategory) {
@@ -799,6 +883,7 @@ class _MainChatScreenState extends State<MainChatScreen>
     // ──────────────────────────────────────────────────────────────────────
 
     String? pendingVaultQuery;
+    _isWaitingForFirstToken.value = true;
 
     final response = await LocalLlmService.runInference(
       text.isEmpty ? "Describe esto" : text,
@@ -807,6 +892,9 @@ class _MainChatScreenState extends State<MainChatScreen>
       onCommandDetected: _handleDeviceCommand,
       onVaultSearchDetected: (query) {
         debugPrint('🔐 [ChatVault] Text turn requested vault search: "$query"');
+        if (mounted) {
+          _vaultContinuationState.value = _VaultContinuationState.queued;
+        }
         pendingVaultQuery = query;
         debugPrint('🔐 [ChatVault] Text hidden continuation armed.');
       },
@@ -838,16 +926,13 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// Throws [Exception] if the widget is no longer mounted.
   /// Logs errors to the debug console.
   void _handleTokenUpdate(String accumulatedText) {
-    if (mounted) {
-      if (accumulatedText.trim().isNotEmpty && _isLoading) {
-        setState(() {
-          _isLoading = false;
-        });
-      }
-      _messages.last.text = accumulatedText;
-      _notifyMessagesChanged();
-      _scrollToBottom();
+    if (!mounted) return;
+    if (_isWaitingForFirstToken.value) {
+      _isWaitingForFirstToken.value = false;
     }
+    _messages.last.text = accumulatedText;
+    _notifyMessagesChanged();
+    _scrollToBottom();
   }
 
   /// Handles device commands detected mid-stream by [LocalLlmService].
@@ -1137,15 +1222,28 @@ class _MainChatScreenState extends State<MainChatScreen>
           .replaceAll('<STOP_VIDEO>', '')
           .trim();
 
+      if (_isWaitingForFirstToken.value) {
+        _isWaitingForFirstToken.value = false;
+      }
       setState(() {
         _isLoading = false;
       });
       if (cleanText.isNotEmpty) {
         _messages.last.text = cleanText;
+        _notifyMessagesChanged();
       } else {
-        _messages.last.text = "Acción ejecutada.";
+        final updatedMessages = List<ChatMessage>.from(_messages);
+        if (updatedMessages.isNotEmpty &&
+            !updatedMessages.last.isUser &&
+            updatedMessages.last.text.trim().isEmpty &&
+            updatedMessages.last.audioPath == null &&
+            updatedMessages.last.imagePath == null) {
+          updatedMessages.removeLast();
+          _messagesNotifier.value = updatedMessages;
+        } else {
+          _notifyMessagesChanged();
+        }
       }
-      _notifyMessagesChanged();
       _scrollToBottom();
 
       if (_isVoiceWakeSession) {
@@ -1223,15 +1321,123 @@ class _MainChatScreenState extends State<MainChatScreen>
     NetworkService.dispose();
   }
 
+  Widget _buildChatHeader(double topPadding) {
+    return RepaintBoundary(
+      child: SizedBox(
+        height: topPadding + _chatHeaderBodyHeight,
+        child: ValueListenableBuilder<String>(
+          valueListenable:
+              ObjectBoxService.instance.personaManager.activeCategoryNotifier,
+          builder: (context, category, child) {
+            return ChatHeaderWidget(
+              personaCategory: category,
+              onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
+              onModelSelectorPressed: _showModelSelector,
+              onClearMemoryPressed: () async {
+                await LocalLlmService.resetSessionState(
+                  onClearUi: () {
+                    if (mounted) {
+                      _clearMessages();
+                      setState(() {
+                        _currentSessionId = null;
+                        _needsSaving = false;
+                      });
+                      _refreshHistory();
+                    }
+                  },
+                );
+              },
+              onExitPressed: () {
+                if (mounted) {
+                  _handleExit();
+                }
+              },
+              onLongPressPill: () {
+                showModalBottomSheet(
+                  context: context,
+                  backgroundColor: Colors.transparent,
+                  isScrollControlled: true,
+                  builder: (_) => const DevToolsBottomSheet(),
+                );
+              },
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMessageBody() {
+    return Expanded(
+      child: RepaintBoundary(
+        child: _ChatMessageViewport(
+          messagesListenable: _messagesNotifier,
+          scrollController: _scrollController,
+          userBubbleColor: _userBubbleColor,
+          vaultStateListenable: _vaultContinuationState,
+          firstTokenWaitListenable: _isWaitingForFirstToken,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStickyInputFooter(double bottomPadding) {
+    return RepaintBoundary(
+      child: Container(
+        decoration: const BoxDecoration(
+          color: _kChatObsidian,
+          border: Border(top: BorderSide(color: Color(0x12FFFFFF), width: 1)),
+        ),
+        padding: EdgeInsets.only(bottom: bottomPadding),
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(
+            minHeight: _inputFooterMinHeight,
+            maxHeight: _inputFooterMaxHeight,
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_selectedImagePath != null)
+                  _SelectedImagePreview(
+                    imagePath: _selectedImagePath!,
+                    onRemove: () => setState(() => _selectedImagePath = null),
+                  ),
+                CompositedTransformTarget(
+                  link: _attachmentMenuLayerLink,
+                  child: VoiceInputPanel(
+                    key: _voiceKey,
+                    textController: _textController,
+                    focusNode: _focusNode,
+                    isLoading: _isLoading,
+                    selectedImagePath: _selectedImagePath,
+                    isTypingNotifier: _isTypingNotifier,
+                    attachmentMenuOpenListenable: _attachmentMenuOpenNotifier,
+                    onAttachmentPressed: _toggleAttachmentMenu,
+                    onSendText: _sendMessage,
+                    onAudioRecorded: _handleAudioRecorded,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final userBubbleColor = AppColors.cyberBlue.withAlpha(50);
+    final mediaQuery = MediaQuery.of(context);
 
     return Stack(
       children: [
         Scaffold(
           key: _scaffoldKey,
-          backgroundColor: AppColors.obsidian,
+          backgroundColor: _kChatObsidian,
+          resizeToAvoidBottomInset: true,
           // ── LEFT DRAWER ─────────────────────────────────────────────────────
           drawer: Drawer(
             backgroundColor: const Color(0xFF1E1F20),
@@ -1735,255 +1941,623 @@ class _MainChatScreenState extends State<MainChatScreen>
               ),
             ),
           ),
-          body: Column(
-            children: [
-              ValueListenableBuilder<String>(
-                valueListenable: ObjectBoxService
-                    .instance
-                    .personaManager
-                    .activeCategoryNotifier,
-                builder: (context, category, child) {
-                  return ChatHeaderWidget(
-                    personaCategory: category,
-                    onMenuPressed: () =>
-                        _scaffoldKey.currentState?.openDrawer(),
-                    onModelSelectorPressed: _showModelSelector,
-                    onClearMemoryPressed: () async {
-                      await LocalLlmService.resetSessionState(
-                        onClearUi: () {
-                          if (mounted) {
-                            _clearMessages();
-                            setState(() {
-                              _currentSessionId = null;
-                              _needsSaving = false;
-                            });
-                            _refreshHistory();
-                          }
-                        },
-                      );
-                    },
-                    onExitPressed: () {
-                      if (mounted) {
-                        _handleExit();
-                      }
-                    },
-                    onLongPressPill: () {
-                      showModalBottomSheet(
-                        context: context,
-                        backgroundColor: Colors.transparent,
-                        isScrollControlled: true,
-                        builder: (_) => const DevToolsBottomSheet(),
-                      );
-                    },
-                  );
-                },
-              ),
-              // 🗣️ ÁREA DE CHAT
-              // ── Holy Grail Layout Pattern ───────────────────────────────────
-              // reverse: true  → newest message is at the bottom visually and
-              //                  at scroll position 0, so the native layout
-              //                  engine pushes content up when the keyboard
-              //                  rises — zero manual listeners required.
-              // shrinkWrap: true → the list is only as tall as its children,
-              //                    which lets Align pin it to the top of the
-              //                    Expanded area when there are few messages.
-              // Align(topCenter) → when shrinkWrap makes the list short, this
-              //                    anchors it to the top instead of floating.
-              // Index mapping   → reversed list means index 0 is the LAST
-              //                    message. We un-reverse via .reversed.toList()
-              //                    so the build order matches visual order.
-              Expanded(
-                child: Stack(
-                  children: [
-                    // ── Empty-state placeholder and Message list ─────────────────────────────
-                    ValueListenableBuilder<List<ChatMessage>>(
-                      valueListenable: _messagesNotifier,
-                      builder: (context, messagesList, child) {
-                        return Stack(
-                          children: [
-                            if (messagesList.isEmpty)
-                              Center(
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    FaIcon(
-                                      FontAwesomeIcons.robot,
-                                      size: 48,
-                                      color: AppColors.cyberBlue.withAlpha(76),
-                                    ),
-                                    const SizedBox(height: 16),
-                                    Text(
-                                      "System Idle. Awaiting input.",
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.bodyMedium,
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            Align(
-                              alignment: Alignment.topCenter,
-                              child: ListView.builder(
-                                controller: _scrollController,
-                                reverse: true,
-                                shrinkWrap: true,
-                                padding: const EdgeInsets.fromLTRB(
-                                  12,
-                                  16,
-                                  12,
-                                  8,
-                                ),
-                                itemCount: messagesList.length,
-                                itemBuilder: (context, index) {
-                                  // PERFORMANCE FIX: Access messages by direct index instead of .reversed.toList()
-                                  final msg =
-                                      messagesList[messagesList.length -
-                                          1 -
-                                          index];
-                                  if (msg.text.isEmpty &&
-                                      !msg.isUser &&
-                                      msg.audioPath == null) {
-                                    return const SizedBox.shrink();
-                                  }
-                                  return ChatBubbleWidget(
-                                    message: msg,
-                                    userBubbleColor: userBubbleColor,
-                                  );
-                                },
-                              ),
-                            ),
-                          ],
-                        );
-                      },
-                    ),
-
-                    // 🌀 ANIMACIÓN DE PENSANDO (SpinKit)
-                    if (_isLoading &&
-                        _messages.isNotEmpty &&
-                        _messages.last.text.isEmpty)
-                      Positioned(
-                        bottom: 16,
-                        left: 44,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          decoration: BoxDecoration(
-                            color: AppColors.deepIndigo,
-                            borderRadius: BorderRadius.circular(18),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.black.withAlpha(25),
-                                blurRadius: 3,
-                                offset: const Offset(0, 2),
-                              ),
-                            ],
-                            border: Border.all(
-                              color: AppColors.glassBorder,
-                              width: 0.5,
-                            ),
-                          ),
-                          child: SpinKitThreeBounce(
-                            color: AppColors.cyberBlue.withAlpha(127),
-                            size: 14.0,
-                          ),
-                        ),
-                      ),
-                  ],
+          body: ValueListenableBuilder<bool>(
+            valueListenable: _tickerModeNotifier,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                // Header is painted in the root Stack foreground. This spacer
+                // preserves the same top layout budget for the lazy chat body.
+                SizedBox(
+                  height: mediaQuery.padding.top + _chatHeaderBodyHeight,
                 ),
-              ),
-
-              // ⌨️ DYNAMIC INPUT PANEL (Gemini Edition)
-              Container(
-                color: AppColors.obsidian,
-                padding: EdgeInsets.only(
-                  left: 12,
-                  right: 12,
-                  bottom: MediaQuery.of(context).padding.bottom + 12,
-                  top: 6,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    // ── Image preview chip ──────────────────────────────────
-                    if (_selectedImagePath != null)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
-                        child: Stack(
-                          clipBehavior: Clip.none,
-                          children: [
-                            Container(
-                              width: 60,
-                              height: 60,
-                              decoration: BoxDecoration(
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(
-                                  color: AppColors.cyberBlue,
-                                  width: 2,
-                                ),
-                                image: DecorationImage(
-                                  image: FileImage(File(_selectedImagePath!)),
-                                  fit: BoxFit.cover,
-                                ),
-                              ),
-                            ),
-                            Positioned(
-                              top: -8,
-                              right: -8,
-                              child: GestureDetector(
-                                onTap: () =>
-                                    setState(() => _selectedImagePath = null),
-                                child: Container(
-                                  padding: const EdgeInsets.all(2),
-                                  decoration: const BoxDecoration(
-                                    color: Colors.redAccent,
-                                    shape: BoxShape.circle,
-                                  ),
-                                  child: const Icon(
-                                    Icons.close,
-                                    size: 14,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                    // ── Floating pill input row ─────────────────────────────
-                    VoiceInputPanel(
-                      key: _voiceKey,
-                      textController: _textController,
-                      focusNode: _focusNode,
-                      isLoading: _isLoading,
-                      selectedImagePath: _selectedImagePath,
-                      isTypingNotifier: _isTypingNotifier,
-                      onAttachmentPressed: _showAttachmentOptions,
-                      onSendText: _sendMessage,
-                      onAudioRecorded: _handleAudioRecorded,
-                    ),
-                  ],
-                ),
-              ),
-            ],
+                _buildMessageBody(),
+                _buildStickyInputFooter(mediaQuery.viewPadding.bottom),
+              ],
+            ),
+            builder: (context, tickerModeEnabled, child) {
+              return TickerMode(enabled: tickerModeEnabled, child: child!);
+            },
           ),
         ),
         // 🛡️ THE ARMOR (OOM BLOCKER)
         ValueListenableBuilder<bool>(
           valueListenable: LocalLlmService.isEngineBusy,
-          builder: (context, isBusy, child) {
-            if (!isBusy) return const SizedBox.shrink();
-            return const SystemLockOverlay(
-              title: "Neural Core Engine Busy",
-              subtitle:
-                  "Reconfiguring memory for high-performance inference...",
+          builder: (context, isEngineBusy, child) {
+            return ValueListenableBuilder<bool>(
+              valueListenable: LocalLlmService.isGeneratingNotifier,
+              builder: (context, isGenerating, _) {
+                if (!isEngineBusy && !isGenerating) {
+                  return const SizedBox.shrink();
+                }
+                return SystemLockOverlay(
+                  title: isEngineBusy
+                      ? "Neural Core Engine Busy"
+                      : "Neural Core Active",
+                  subtitle: isEngineBusy
+                      ? "Reconfiguring memory for high-performance inference..."
+                      : "Local inference stream is running...",
+                );
+              },
             );
           },
         ),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          child: ValueListenableBuilder<bool>(
+            valueListenable: _tickerModeNotifier,
+            child: Material(
+              type: MaterialType.transparency,
+              child: _buildChatHeader(mediaQuery.padding.top),
+            ),
+            builder: (context, tickerModeEnabled, child) {
+              return TickerMode(enabled: tickerModeEnabled, child: child!);
+            },
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _ChatMessageViewport extends StatelessWidget {
+  static const double _messageCacheExtent = 720.0;
+
+  final ValueListenable<List<ChatMessage>> messagesListenable;
+  final ScrollController scrollController;
+  final Color userBubbleColor;
+  final ValueListenable<_VaultContinuationState> vaultStateListenable;
+  final ValueListenable<bool> firstTokenWaitListenable;
+
+  const _ChatMessageViewport({
+    required this.messagesListenable,
+    required this.scrollController,
+    required this.userBubbleColor,
+    required this.vaultStateListenable,
+    required this.firstTokenWaitListenable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      children: [
+        const Positioned.fill(child: _ChatAtmosphere()),
+        Positioned.fill(
+          child: ValueListenableBuilder<List<ChatMessage>>(
+            valueListenable: messagesListenable,
+            child: const _EmptyChatPlaceholder(),
+            builder: (context, messagesList, emptyState) {
+              return Stack(
+                children: [
+                  if (messagesList.isEmpty) emptyState!,
+                  ListView.builder(
+                    controller: scrollController,
+                    reverse: true,
+                    cacheExtent: _messageCacheExtent,
+                    addAutomaticKeepAlives: true,
+                    addRepaintBoundaries: true,
+                    addSemanticIndexes: false,
+                    keyboardDismissBehavior:
+                        ScrollViewKeyboardDismissBehavior.onDrag,
+                    padding: const EdgeInsets.fromLTRB(12, 16, 12, 8),
+                    itemCount: messagesList.length,
+                    itemBuilder: (context, index) {
+                      final msg = messagesList[messagesList.length - 1 - index];
+                      if (msg.text.isEmpty &&
+                          !msg.isUser &&
+                          msg.audioPath == null) {
+                        return const SizedBox.shrink();
+                      }
+                      return ChatBubbleWidget(
+                        key: ObjectKey(msg),
+                        message: msg,
+                        userBubbleColor: userBubbleColor,
+                      );
+                    },
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        Positioned(
+          left: 16,
+          bottom: 12,
+          child: _InferenceFooterStatus(
+            vaultStateListenable: vaultStateListenable,
+            firstTokenWaitListenable: firstTokenWaitListenable,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ChatAtmosphere extends StatelessWidget {
+  const _ChatAtmosphere();
+
+  @override
+  Widget build(BuildContext context) {
+    return const RepaintBoundary(
+      child: CustomPaint(
+        painter: _ChatAtmospherePainter(),
+        child: SizedBox.expand(),
+      ),
+    );
+  }
+}
+
+class _ChatAtmospherePainter extends CustomPainter {
+  const _ChatAtmospherePainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rect = Offset.zero & size;
+    canvas.drawRect(rect, Paint()..color = _kChatObsidian);
+
+    _drawRadial(
+      canvas,
+      size,
+      center: const Alignment(-1.1, -0.85),
+      radius: size.longestSide * 0.72,
+      colors: const [Color(0x2E00ADB5), Color(0x0000ADB5)],
+    );
+    _drawRadial(
+      canvas,
+      size,
+      center: const Alignment(1.15, 0.85),
+      radius: size.longestSide * 0.68,
+      colors: const [Color(0x247B2CBF), Color(0x007B2CBF)],
+    );
+    _drawRadial(
+      canvas,
+      size,
+      center: const Alignment(0.1, -0.2),
+      radius: size.shortestSide * 0.55,
+      colors: const [Color(0x1000E5FF), Color(0x0000E5FF)],
+    );
+
+    final verticalMask = Paint()
+      ..shader = const LinearGradient(
+        begin: Alignment.topCenter,
+        end: Alignment.bottomCenter,
+        colors: [Color(0x770B0D17), Color(0x000B0D17), Color(0x660B0D17)],
+        stops: [0.0, 0.44, 1.0],
+      ).createShader(rect);
+    canvas.drawRect(rect, verticalMask);
+
+    final sideMask = Paint()
+      ..shader = const LinearGradient(
+        colors: [
+          Color(0x660B0D17),
+          Color(0x000B0D17),
+          Color(0x000B0D17),
+          Color(0x660B0D17),
+        ],
+        stops: [0.0, 0.22, 0.78, 1.0],
+      ).createShader(rect);
+    canvas.drawRect(rect, sideMask);
+
+    final scanLinePaint = Paint()
+      ..color = const Color(0x0500ADB5)
+      ..strokeWidth = 1;
+    for (double y = 18; y < size.height; y += 28) {
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), scanLinePaint);
+    }
+  }
+
+  void _drawRadial(
+    Canvas canvas,
+    Size size, {
+    required Alignment center,
+    required double radius,
+    required List<Color> colors,
+  }) {
+    final focalPoint = center.alongSize(size);
+    final paint = Paint()
+      ..shader = RadialGradient(
+        colors: colors,
+      ).createShader(Rect.fromCircle(center: focalPoint, radius: radius));
+    canvas.drawCircle(focalPoint, radius, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ChatAtmospherePainter oldDelegate) => false;
+}
+
+class _InferenceFooterStatus extends StatelessWidget {
+  final ValueListenable<_VaultContinuationState> vaultStateListenable;
+  final ValueListenable<bool> firstTokenWaitListenable;
+
+  const _InferenceFooterStatus({
+    required this.vaultStateListenable,
+    required this.firstTokenWaitListenable,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: UnconstrainedBox(
+          alignment: Alignment.centerLeft,
+          child: ValueListenableBuilder<_VaultContinuationState>(
+            valueListenable: vaultStateListenable,
+            builder: (context, vaultState, _) {
+              return ValueListenableBuilder<bool>(
+                valueListenable: LocalLlmService.isGeneratingNotifier,
+                builder: (context, isGenerating, _) {
+                  return ValueListenableBuilder<bool>(
+                    valueListenable: firstTokenWaitListenable,
+                    builder: (context, isWaitingForFirstToken, _) {
+                      final Widget child;
+                      if (vaultState != _VaultContinuationState.idle) {
+                        child = const _FooterThinkingPill(
+                          key: ValueKey('vault-dots'),
+                        );
+                      } else if (isGenerating && isWaitingForFirstToken) {
+                        child = const _FooterThinkingPill(
+                          key: ValueKey('decode-dots'),
+                        );
+                      } else {
+                        child = const SizedBox.shrink(
+                          key: ValueKey('idle-status'),
+                        );
+                      }
+
+                      return Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 180),
+                            switchInCurve: Curves.easeOutCubic,
+                            switchOutCurve: Curves.easeInCubic,
+                            child: child,
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyChatPlaceholder extends StatelessWidget {
+  const _EmptyChatPlaceholder();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FaIcon(FontAwesomeIcons.robot, size: 48, color: Color(0x4C00ADB5)),
+          SizedBox(height: 16),
+          Text(
+            'System Idle. Awaiting input.',
+            style: TextStyle(
+              color: Color(0xB8DDE8F0),
+              fontFamily: 'Outfit',
+              fontSize: 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _FooterThinkingPill extends StatelessWidget {
+  const _FooterThinkingPill({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: const BoxDecoration(
+          color: _kChatObsidian,
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(16),
+            topRight: Radius.circular(16),
+            bottomRight: Radius.circular(16),
+            bottomLeft: Radius.circular(4),
+          ),
+          border: Border.fromBorderSide(
+            BorderSide(color: Color(0x8000F0FF), width: 1),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0x4000F0FF),
+              blurRadius: 18,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: const SpinKitThreeBounce(color: Color(0xFF00F0FF), size: 18),
+      ),
+    );
+  }
+}
+
+class _AttachmentMenuOverlay extends StatelessWidget {
+  static const double _panelGap = 12.0;
+
+  final LayerLink layerLink;
+  final ValueListenable<bool> isOpenListenable;
+  final VoidCallback onDismiss;
+  final ValueChanged<_AttachmentMenuAction> onSelected;
+
+  const _AttachmentMenuOverlay({
+    required this.layerLink,
+    required this.isOpenListenable,
+    required this.onDismiss,
+    required this.onSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned.fill(
+      child: TextFieldTapRegion(
+        child: Stack(
+          children: [
+            GestureDetector(
+              behavior: HitTestBehavior.translucent,
+              onTap: onDismiss,
+              child: const SizedBox.expand(),
+            ),
+            CompositedTransformFollower(
+              link: layerLink,
+              showWhenUnlinked: false,
+              targetAnchor: Alignment.topCenter,
+              followerAnchor: Alignment.bottomCenter,
+              offset: const Offset(0, -_panelGap),
+              child: Material(
+                type: MaterialType.transparency,
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: isOpenListenable,
+                  child: _AttachmentGlassMenu(onSelected: onSelected),
+                  builder: (context, isOpen, child) {
+                    return IgnorePointer(
+                      ignoring: !isOpen,
+                      child: AnimatedOpacity(
+                        opacity: isOpen ? 1 : 0,
+                        duration: const Duration(milliseconds: 160),
+                        curve: Curves.easeOutCubic,
+                        child: AnimatedScale(
+                          scale: isOpen ? 1 : 0.94,
+                          alignment: Alignment.bottomCenter,
+                          duration: const Duration(milliseconds: 180),
+                          curve: Curves.easeOutCubic,
+                          child: child,
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AttachmentGlassMenu extends StatelessWidget {
+  final ValueChanged<_AttachmentMenuAction> onSelected;
+
+  const _AttachmentGlassMenu({required this.onSelected});
+
+  @override
+  Widget build(BuildContext context) {
+    final panelWidth = (MediaQuery.sizeOf(context).width - 32)
+        .clamp(304.0, 364.0)
+        .toDouble();
+
+    return RepaintBoundary(
+      child: ClipRRect(
+        borderRadius: const BorderRadius.all(Radius.circular(30)),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 20, sigmaY: 20),
+          child: Container(
+            width: panelWidth,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xD10B0D17),
+              borderRadius: const BorderRadius.all(Radius.circular(30)),
+              border: Border.all(color: const Color(0x5200F0FF), width: 1),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x3D00F0FF),
+                  blurRadius: 30,
+                  spreadRadius: -8,
+                  offset: Offset(0, 14),
+                ),
+                BoxShadow(
+                  color: Color(0x80000000),
+                  blurRadius: 28,
+                  offset: Offset(0, 18),
+                ),
+              ],
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xE6111724), Color(0xD10B0D17)],
+              ),
+            ),
+            child: GridView.count(
+              crossAxisCount: 2,
+              shrinkWrap: true,
+              padding: EdgeInsets.zero,
+              mainAxisSpacing: 12,
+              crossAxisSpacing: 12,
+              childAspectRatio: 1.45,
+              physics: const NeverScrollableScrollPhysics(),
+              children: [
+                _buildTile(
+                  icon: Icons.camera_alt_rounded,
+                  title: 'Camera',
+                  subtitle: 'Capture vision',
+                  action: _AttachmentMenuAction.camera,
+                ),
+                _buildTile(
+                  icon: Icons.photo_library_rounded,
+                  title: 'Gallery',
+                  subtitle: 'Image upload',
+                  action: _AttachmentMenuAction.gallery,
+                ),
+                _buildTile(
+                  icon: Icons.local_library_rounded,
+                  title: 'Legal Library',
+                  subtitle: 'RAG & PDF Chunking',
+                  action: _AttachmentMenuAction.legalLibrary,
+                ),
+                _buildTile(
+                  icon: Icons.inventory_2_rounded,
+                  title: 'Personal Vault',
+                  subtitle: 'HNSW Vector Search',
+                  action: _AttachmentMenuAction.personalVault,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTile({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required _AttachmentMenuAction action,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: () => onSelected(action),
+        borderRadius: const BorderRadius.all(Radius.circular(20)),
+        splashColor: const Color(0x3300F0FF),
+        highlightColor: const Color(0x1F00F0FF),
+        child: Ink(
+          decoration: BoxDecoration(
+            color: const Color(0x5C101827),
+            borderRadius: const BorderRadius.all(Radius.circular(20)),
+            border: Border.all(color: const Color(0x26FFFFFF), width: 1),
+            boxShadow: const [
+              BoxShadow(
+                color: Color(0x2600F0FF),
+                blurRadius: 18,
+                spreadRadius: -10,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: const Color(0x2400F0FF),
+                    borderRadius: const BorderRadius.all(Radius.circular(12)),
+                    border: Border.all(
+                      color: const Color(0x4D00F0FF),
+                      width: 1,
+                    ),
+                  ),
+                  child: Icon(icon, color: const Color(0xFF00F0FF), size: 21),
+                ),
+                const Spacer(),
+                Text(
+                  title,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0xF2FFFFFF),
+                    fontFamily: 'Outfit',
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Color(0x99FFFFFF),
+                    fontFamily: 'Outfit',
+                    fontSize: 11,
+                    fontWeight: FontWeight.w500,
+                    height: 1.15,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectedImagePreview extends StatelessWidget {
+  final String imagePath;
+  final VoidCallback onRemove;
+
+  const _SelectedImagePreview({
+    required this.imagePath,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0, left: 4.0),
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            width: 60,
+            height: 60,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: AppColors.cyberBlue, width: 2),
+              image: DecorationImage(
+                image: FileImage(File(imagePath)),
+                fit: BoxFit.cover,
+              ),
+            ),
+          ),
+          Positioned(
+            top: -8,
+            right: -8,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                padding: const EdgeInsets.all(2),
+                decoration: const BoxDecoration(
+                  color: Colors.redAccent,
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(Icons.close, size: 14, color: Colors.white),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

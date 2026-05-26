@@ -1,10 +1,15 @@
 import 'dart:io';
-import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/features/chat/domain/entities/chat_message.dart';
 import 'package:aitana/features/chat/ui/widgets/audio_bubble.dart';
+
+const Color _kAitanaBubbleBase = Color(0xFF101827);
+const Color _kLorenzoBubbleBorder = Color(0x333EE7F2);
+const Color _kAitanaBubbleBorder = Color(0x6600ADB5);
+const Color _kBubbleTextHigh = Color(0xFFF4F8FF);
+const Color _kAitanaTextHigh = Color(0xFFEAFBFF);
 
 class ChatBubbleWidget extends StatelessWidget {
   final ChatMessage message;
@@ -45,105 +50,100 @@ class ChatBubbleWidget extends StatelessWidget {
       builder: (BuildContext bottomSheetContext) {
         return ClipRRect(
           borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-          child: BackdropFilter(
-            filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
-            child: Container(
-              padding: const EdgeInsets.only(left: 24, right: 24, top: 20, bottom: 0),
-              decoration: BoxDecoration(
-                color: AppColors.deepIndigo.withAlpha(200),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(20),
-                ),
-                border: const Border(
-                  top: BorderSide(color: AppColors.glassBorder, width: 1.0),
-                ),
+          child: Container(
+            padding: const EdgeInsets.only(
+              left: 24,
+              right: 24,
+              top: 20,
+              bottom: 0,
+            ),
+            decoration: const BoxDecoration(
+              color: Color(0xF20B0D17),
+              borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+              border: Border(
+                top: BorderSide(color: Color(0x3300ADB5), width: 1.0),
               ),
-              child: SafeArea(
-                bottom: true,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // Drag handle
-                    Center(
-                      child: Container(
-                        width: 40,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: Colors.white24,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
+            ),
+            child: SafeArea(
+              bottom: true,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: Colors.white24,
+                        borderRadius: BorderRadius.circular(2),
                       ),
                     ),
-                    const SizedBox(height: 16),
+                  ),
+                  const SizedBox(height: 16),
 
-                    // Title row
-                    const Row(
-                      children: [
-                        Icon(
-                          Icons.settings_input_component,
-                          color: AppColors.cyberBlue,
-                          size: 24,
-                        ),
-                        SizedBox(width: 12),
-                        Text(
-                          'Message Protocols',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontFamily: 'Outfit',
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
-                            letterSpacing: 1.2,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-
-                    // Subtitle 1
-                    const Text(
-                      'Select an active protocol to apply to this data transmission.',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontFamily: 'Outfit',
-                        fontSize: 13,
+                  const Row(
+                    children: [
+                      Icon(
+                        Icons.settings_input_component,
+                        color: AppColors.cyberBlue,
+                        size: 24,
                       ),
-                    ),
-                    const SizedBox(height: 4),
-
-                    // Subtitle 2
-                    const Text(
-                      'Security: Local Sandbox | Source: Verified Inherent State',
-                      style: TextStyle(
-                        color: Colors.white38,
-                        fontFamily: 'Outfit',
-                        fontSize: 11,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.1,
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    const Divider(color: Colors.white12, height: 1),
-                    const SizedBox(height: 8),
-
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: const Icon(Icons.copy, color: Colors.white),
-                      title: const Text(
-                        "Copy to Clipboard",
+                      SizedBox(width: 12),
+                      Text(
+                        'Message Protocols',
                         style: TextStyle(
-                          fontFamily: 'Outfit',
                           color: Colors.white,
+                          fontFamily: 'Outfit',
+                          fontWeight: FontWeight.bold,
+                          fontSize: 18,
+                          letterSpacing: 1.2,
                         ),
                       ),
-                      onTap: () {
-                        Navigator.pop(bottomSheetContext);
-                        _copyToClipboard(message.text, context);
-                      },
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+
+                  const Text(
+                    'Select an active protocol to apply to this data transmission.',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontFamily: 'Outfit',
+                      fontSize: 13,
                     ),
-                    // TODO: Add future actions here (e.g., Delete, Translate, Share)
-                  ],
-                ),
+                  ),
+                  const SizedBox(height: 4),
+
+                  const Text(
+                    'Security: Local Sandbox | Source: Verified Inherent State',
+                    style: TextStyle(
+                      color: Colors.white38,
+                      fontFamily: 'Outfit',
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.1,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  const Divider(color: Colors.white12, height: 1),
+                  const SizedBox(height: 8),
+
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.copy, color: Colors.white),
+                    title: const Text(
+                      "Copy to Clipboard",
+                      style: TextStyle(
+                        fontFamily: 'Outfit',
+                        color: Colors.white,
+                      ),
+                    ),
+                    onTap: () {
+                      Navigator.pop(bottomSheetContext);
+                      _copyToClipboard(message.text, context);
+                    },
+                  ),
+                ],
               ),
             ),
           ),
@@ -162,22 +162,17 @@ class ChatBubbleWidget extends StatelessWidget {
           margin: const EdgeInsets.symmetric(vertical: 16),
           padding: const EdgeInsets.all(16),
           width: MediaQuery.of(context).size.width * 0.85, // Más ancha
-          decoration: BoxDecoration(
-            color: AppColors.deepIndigo.withAlpha(
-              150,
-            ), // Fondo cristalino oscuro
-            borderRadius: BorderRadius.circular(16), // Completamente redondeada
-            border: Border.all(
-              color: const Color(
-                0xFFD4AF37,
-              ).withAlpha(100), // Borde dorado tenue
-              width: 1.0,
+          decoration: const BoxDecoration(
+            color: Color(0xFF11131E),
+            borderRadius: BorderRadius.all(Radius.circular(16)),
+            border: Border.fromBorderSide(
+              BorderSide(color: Color(0x66D4AF37), width: 1.0),
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withAlpha(40),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
+                color: Color(0x33000000),
+                blurRadius: 12,
+                offset: Offset(0, 4),
               ),
             ],
           ),
@@ -209,24 +204,37 @@ class ChatBubbleWidget extends StatelessWidget {
     }
 
     // ─── CASO NORMAL: MENSAJES DE LORENZO O AITANA ───
+    final isUser = message.isUser;
+    final bubbleColor = isUser ? userBubbleColor : _kAitanaBubbleBase;
+    final borderColor = isUser ? _kLorenzoBubbleBorder : _kAitanaBubbleBorder;
+    final textColor = isUser ? _kBubbleTextHigh : _kAitanaTextHigh;
+    final textWeight = isUser ? FontWeight.w500 : FontWeight.w400;
+
     return Align(
-      alignment: message.isUser ? Alignment.centerRight : Alignment.centerLeft,
+      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
       child: Row(
-        mainAxisAlignment: message.isUser
+        mainAxisAlignment: isUser
             ? MainAxisAlignment.end
             : MainAxisAlignment.start,
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (!message.isUser) ...[
-            CircleAvatar(
-              radius: 12,
-              backgroundColor: AppColors.cyberBlue.withAlpha(50),
+          if (!isUser) ...[
+            Container(
+              width: 26,
+              height: 26,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: const Color(0x1A00ADB5),
+                shape: BoxShape.circle,
+                border: Border.all(color: const Color(0x6600ADB5), width: 1),
+              ),
               child: const Text(
                 'AI',
                 style: TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textMedium,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 11,
+                  color: Color(0xFFD7FBFF),
+                  fontFamily: 'Outfit',
+                  fontWeight: FontWeight.w700,
                 ),
               ),
             ),
@@ -234,9 +242,7 @@ class ChatBubbleWidget extends StatelessWidget {
           ],
           Flexible(
             child: GestureDetector(
-              onLongPress: !message.isUser
-                  ? () => _showContextMenu(context)
-                  : null,
+              onLongPress: !isUser ? () => _showContextMenu(context) : null,
               child: Container(
                 margin: const EdgeInsets.only(bottom: 12),
                 padding: const EdgeInsets.symmetric(
@@ -247,28 +253,24 @@ class ChatBubbleWidget extends StatelessWidget {
                   maxWidth: MediaQuery.of(context).size.width * 0.75,
                 ),
                 decoration: BoxDecoration(
-                  color: message.isUser
-                      ? userBubbleColor
-                      : AppColors.deepIndigo,
+                  color: bubbleColor,
                   borderRadius: BorderRadius.only(
                     topLeft: const Radius.circular(18),
                     topRight: const Radius.circular(18),
-                    bottomLeft: Radius.circular(message.isUser ? 18 : 4),
-                    bottomRight: Radius.circular(message.isUser ? 4 : 18),
+                    bottomLeft: Radius.circular(isUser ? 18 : 4),
+                    bottomRight: Radius.circular(isUser ? 4 : 18),
                   ),
-                  border: message.isUser
-                      ? null
-                      : Border.all(color: AppColors.glassBorder, width: 0.5),
-                  boxShadow: [
+                  border: Border.all(color: borderColor, width: 1),
+                  boxShadow: const [
                     BoxShadow(
-                      color: Colors.black.withAlpha(25),
-                      blurRadius: 3,
-                      offset: const Offset(0, 2),
+                      color: Color(0x33000000),
+                      blurRadius: 10,
+                      offset: Offset(0, 3),
                     ),
                   ],
                 ),
                 child: Column(
-                  crossAxisAlignment: message.isUser
+                  crossAxisAlignment: isUser
                       ? CrossAxisAlignment.end
                       : CrossAxisAlignment.start,
                   children: [
@@ -288,13 +290,12 @@ class ChatBubbleWidget extends StatelessWidget {
                       AudioBubble(
                         audioPath: message.audioPath!,
                         durationText: message.audioDuration ?? '0.0s',
-                        isUser: message.isUser,
+                        isUser: isUser,
                       ),
                       if (message.text.isNotEmpty) const SizedBox(height: 8),
                     ],
                     // ─── VAULT IMAGE RENDERING ───
-                    if (!message.isUser &&
-                        message.text.contains('Source URI: ')) ...[
+                    if (!isUser && message.text.contains('Source URI: ')) ...[
                       Builder(
                         builder: (context) {
                           final regex = RegExp(r'Source URI: ([^\s\n]+)');
@@ -325,11 +326,12 @@ class ChatBubbleWidget extends StatelessWidget {
                     if (message.text.isNotEmpty)
                       Text(
                         message.text,
-                        style: const TextStyle(
-                          color: Colors.white,
+                        style: TextStyle(
+                          color: textColor,
                           fontSize: 15,
                           fontFamily: 'Outfit',
-                          height: 1.4,
+                          fontWeight: textWeight,
+                          height: 1.42,
                         ),
                       ),
                   ],

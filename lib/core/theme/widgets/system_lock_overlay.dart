@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:aitana/core/theme/app_colors.dart';
 
 /// A reusable full-screen overlay that blocks user interaction during
 /// critical system operations (RAM-heavy tasks, exit sequences, etc.).
-class SystemLockOverlay extends StatelessWidget {
+class SystemLockOverlay extends StatefulWidget {
   final String title;
   final String subtitle;
   final bool showSpinner;
@@ -18,72 +17,100 @@ class SystemLockOverlay extends StatelessWidget {
   });
 
   @override
+  State<SystemLockOverlay> createState() => _SystemLockOverlayState();
+}
+
+class _SystemLockOverlayState extends State<SystemLockOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _glowController;
+
+  @override
+  void initState() {
+    super.initState();
+    _glowController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 3600),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _glowController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        // ── Interaction Lock ──────────────────────────────────────────────────
-        // The ModalBarrier absorbs all pointer events, preventing the user
-        // from interacting with the background UI (Drawer, buttons, keyboard).
-        const ModalBarrier(
-          dismissible: false,
-          color: Colors.transparent,
-        ),
-
-        // ── Visual Scrim & Content ────────────────────────────────────────────
-        Container(
-          width: double.infinity,
-          height: double.infinity,
-          color: overlayColor ?? Colors.black.withAlpha(178), // ≈ 0.70 opacity for premium feel
-          child: Material(
-            // Material ancestor is CRITICAL here to prevent the yellow/red 
-            // underline bug when this is used at the top level of a Stack 
-            // outside of a normal Scaffold/Material widget hierarchy.
-            color: Colors.transparent,
-            child: Center(
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32.0),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    if (showSpinner) ...[
-                      const CircularProgressIndicator(
-                        color: AppColors.cyberBlue,
-                        strokeWidth: 2.5,
-                      ),
-                      const SizedBox(height: 32),
-                    ],
-                    Text(
-                      title,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: AppColors.textHigh,
-                        fontFamily: 'Outfit',
-                        fontWeight: FontWeight.w600,
-                        fontSize: 18,
-                        letterSpacing: 0.5,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      subtitle,
-                      textAlign: TextAlign.center,
-                      style: const TextStyle(
-                        color: AppColors.textMedium,
-                        fontFamily: 'Outfit',
-                        fontWeight: FontWeight.w400,
-                        fontSize: 14,
-                        fontStyle: FontStyle.italic,
-                        decoration: TextDecoration.none,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+        const ModalBarrier(dismissible: false, color: Colors.transparent),
+        Positioned(
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 120,
+          child: _CoreGlowBand(animation: _glowController),
         ),
       ],
+    );
+  }
+}
+
+class _CoreGlowBand extends StatelessWidget {
+  final Animation<double> animation;
+
+  const _CoreGlowBand({required this.animation});
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: IgnorePointer(
+        child: AnimatedBuilder(
+          animation: animation,
+          builder: (context, _) {
+            final value = animation.value;
+            final beginX = -1.35 + (value * 0.9);
+            final endX = 0.35 + (value * 1.45);
+
+            return DecoratedBox(
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment(beginX, -1),
+                  end: Alignment(endX, 1),
+                  colors: const [
+                    Color(0xCC2A0F6E),
+                    Color(0xD900F0FF),
+                    Color(0xCC111827),
+                  ],
+                  stops: const [0.0, 0.48, 1.0],
+                ),
+                boxShadow: const [
+                  BoxShadow(
+                    color: Color(0x7300F0FF),
+                    blurRadius: 34,
+                    spreadRadius: -12,
+                    offset: Offset(0, 18),
+                  ),
+                ],
+              ),
+              child: const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x2200F0FF),
+                      Color(0x660B0D17),
+                      Color(0x000B0D17),
+                    ],
+                    stops: [0.0, 0.62, 1.0],
+                  ),
+                ),
+              ),
+            );
+          },
+        ),
+      ),
     );
   }
 }

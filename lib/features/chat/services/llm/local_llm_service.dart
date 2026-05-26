@@ -792,10 +792,10 @@ class LocalLlmService {
         const Duration(seconds: 60),
         onTimeout: () {
           _activeSubscription?.cancel();
-          final partial = toolParser?.getFinalCleanText() ?? '';
-          return partial.isNotEmpty
-              ? '$partial... [Timeout]'
-              : 'No answer from the engine.';
+          debugPrint(
+            '[HiddenToolLane] Stream timeout; aborting empty hidden continuation.',
+          );
+          return '';
         },
       );
 
@@ -820,9 +820,7 @@ class LocalLlmService {
         '[HiddenToolLane] Native hidden continuation completed: $nativeResult',
       );
 
-      final cleanResponse = finalResponse.trim().isEmpty
-          ? 'No answer from the engine.'
-          : finalResponse.trim();
+      final cleanResponse = finalResponse.trim();
 
       for (final line in cleanResponse.split('\n')) {
         if (line.trim().isNotEmpty) {
@@ -1159,9 +1157,7 @@ class LocalLlmService {
         onTimeout: () {
           _activeSubscription?.cancel();
           final partial = toolParser?.getFinalCleanText() ?? '';
-          return partial.isNotEmpty
-              ? '$partial... [Timeout]'
-              : 'Sorry, my processor exceeded the time limit.';
+          return partial.trim();
         },
       );
 
@@ -1190,9 +1186,7 @@ class LocalLlmService {
       debugPrint('🧭 [LocalLlmService] Native invoke completed: $nativeResult');
 
       final cleanResponse = finalResponse.trim().isEmpty
-          ? (toolParser.startVideoFired
-                ? 'Opening camera...'
-                : 'No answer from the engine.')
+          ? (toolParser.startVideoFired ? 'Opening camera...' : '')
           : finalResponse.trim();
 
       // [MODIFICACIÓN PARA LOGS LIMPIOS]

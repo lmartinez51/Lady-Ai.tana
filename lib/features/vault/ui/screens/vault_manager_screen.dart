@@ -7,12 +7,13 @@ import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/vault/models/personal_vault_image.dart';
 import 'package:aitana/features/vault/services/batch_ingestion_manager.dart';
+import 'package:aitana/features/vault/services/vault_ingestion_service.dart';
 import 'package:aitana/objectbox.g.dart';
 
 class VaultManagerScreen extends StatefulWidget {
-  final BatchIngestionManager batchManager;
+  final BatchIngestionManager? batchManager;
 
-  const VaultManagerScreen({super.key, required this.batchManager});
+  const VaultManagerScreen({super.key, this.batchManager});
 
   @override
   State<VaultManagerScreen> createState() => _VaultManagerScreenState();
@@ -22,13 +23,21 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
   final ImagePicker _picker = ImagePicker();
   final Box<PersonalVaultImage> _vaultBox =
       ObjectBoxService.instance.vaultImageBox;
+  late final BatchIngestionManager _batchManager;
+
+  @override
+  void initState() {
+    super.initState();
+    _batchManager =
+        widget.batchManager ?? BatchIngestionManager(VaultIngestionService());
+  }
 
   /// Trigger the batch picking and processing flow.
   Future<void> _handleBatchAnalysis() async {
     final List<XFile> pickedFiles = await _picker.pickMultiImage();
     if (pickedFiles.isNotEmpty) {
       final List<String> paths = pickedFiles.map((f) => f.path).toList();
-      await widget.batchManager.processImageBatch(paths);
+      await _batchManager.processImageBatch(paths);
     }
   }
 
@@ -177,7 +186,7 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
               ),
             ),
             ValueListenableBuilder<BatchProgress>(
-              valueListenable: widget.batchManager.progress,
+              valueListenable: _batchManager.progress,
               builder: (context, progress, child) {
                 // Disable button if totalImages > 0 and batch is not finished.
                 final bool isProcessing =
@@ -209,7 +218,7 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
 
   Widget _buildProgressSection() {
     return ValueListenableBuilder<BatchProgress>(
-      valueListenable: widget.batchManager.progress,
+      valueListenable: _batchManager.progress,
       builder: (context, progress, child) {
         if (progress.isFinished || progress.totalImages == 0) {
           return const SizedBox.shrink();

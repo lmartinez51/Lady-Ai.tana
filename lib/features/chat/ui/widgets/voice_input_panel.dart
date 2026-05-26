@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:record/record.dart';
@@ -14,6 +15,7 @@ class VoiceInputPanel extends StatefulWidget {
   final bool isLoading;
   final String? selectedImagePath;
   final ValueNotifier<bool> isTypingNotifier;
+  final ValueListenable<bool> attachmentMenuOpenListenable;
   final VoidCallback onAttachmentPressed;
   final VoidCallback onSendText;
   final Function(String path) onAudioRecorded;
@@ -25,6 +27,7 @@ class VoiceInputPanel extends StatefulWidget {
     required this.isLoading,
     this.selectedImagePath,
     required this.isTypingNotifier,
+    required this.attachmentMenuOpenListenable,
     required this.onAttachmentPressed,
     required this.onSendText,
     required this.onAudioRecorded,
@@ -181,184 +184,242 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: AppColors.deepIndigo,
-        borderRadius: BorderRadius.circular(36),
-        border: Border.all(color: AppColors.glassBorder, width: 1.0),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withAlpha(70),
-            blurRadius: 16,
-            offset: const Offset(0, 6),
-          ),
-        ],
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // ── Left actions ──
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 250),
-            child: _isRecording
-                ? const SizedBox(width: 12, key: ValueKey('pad'))
-                : Padding(
-                    key: const ValueKey('actions'),
-                    padding: const EdgeInsets.only(
-                      left: 6.0,
-                      top: 6.0,
-                      bottom: 6.0,
-                    ),
-                    child: Container(
-                      height: 44,
-                      width: 44,
-                      decoration: BoxDecoration(
-                        color: AppColors.cyberBlue.withAlpha(40),
-                        shape: BoxShape.circle,
-                      ),
-                      child: IconButton(
-                        icon: const Icon(
-                          Icons.attach_file_rounded,
-                          color: AppColors.cyberBlue,
-                          size: 22,
-                        ),
-                        onPressed: widget.isLoading
-                            ? null
-                            : widget.onAttachmentPressed,
-                        tooltip: 'Attach',
-                      ),
-                    ),
-                  ),
-          ),
-
-          // ── Center: TextField OR Waveform ──
-          Expanded(
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
+    return TextFieldTapRegion(
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.deepIndigo,
+          borderRadius: BorderRadius.circular(36),
+          border: Border.all(color: AppColors.glassBorder, width: 1.0),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withAlpha(70),
+              blurRadius: 16,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // ── Left actions ──
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 250),
               child: _isRecording
-                  ? const Padding(
-                      key: ValueKey('wave'),
-                      padding: EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 14,
+                  ? const SizedBox(width: 12, key: ValueKey('pad'))
+                  : Padding(
+                      key: const ValueKey('actions'),
+                      padding: const EdgeInsets.only(
+                        left: 6.0,
+                        top: 6.0,
+                        bottom: 6.0,
                       ),
-                      child: _WaveformWidget(),
-                    )
-                  : TextField(
-                      key: const ValueKey('textfield'),
-                      controller: widget.textController,
-                      focusNode: widget.focusNode,
-                      maxLines: 5,
-                      minLines: 1,
-                      textCapitalization: TextCapitalization.sentences,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontFamily: 'Outfit',
-                        fontSize: 15,
-                      ),
-                      cursorColor: AppColors.cyberBlue,
-                      onTapOutside: (PointerDownEvent event) =>
-                          FocusManager.instance.primaryFocus?.unfocus(),
-                      decoration: const InputDecoration(
-                        hintText: 'Message Aitana...',
-                        hintStyle: TextStyle(
-                          color: Colors.white30,
-                          fontFamily: 'Outfit',
-                        ),
-                        filled: true,
-                        fillColor: Colors.transparent,
-                        border: InputBorder.none,
-                        enabledBorder: InputBorder.none,
-                        focusedBorder: InputBorder.none,
-                        errorBorder: InputBorder.none,
-                        disabledBorder: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.symmetric(
-                          horizontal: 8,
-                          vertical: 12,
-                        ),
+                      child: ValueListenableBuilder<bool>(
+                        valueListenable: widget.attachmentMenuOpenListenable,
+                        builder: (context, isOpen, _) {
+                          return _AttachmentPlusButton(
+                            isOpen: isOpen,
+                            isEnabled: !widget.isLoading || isOpen,
+                            onPressed: widget.onAttachmentPressed,
+                          );
+                        },
                       ),
                     ),
             ),
-          ),
 
-          // ── Right: action button ──
-          ValueListenableBuilder<bool>(
-            valueListenable: widget.isTypingNotifier,
-            builder: (context, isTyping, _) {
-              final showSend = isTyping || widget.selectedImagePath != null;
-              return Padding(
-                padding: const EdgeInsets.all(6),
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  height: 44,
-                  width: 44,
-                  decoration: BoxDecoration(
-                    color: widget.isLoading
-                        ? Colors.grey[800]
-                        : _isRecording
-                        ? Colors.redAccent.withAlpha(30)
-                        : AppColors.cyberBlue.withAlpha(40),
-                    shape: BoxShape.circle,
-                    border: _isRecording
-                        ? Border.all(
-                            color: Colors.redAccent.withAlpha(160),
-                            width: 1.5,
-                          )
-                        : null,
-                  ),
-                  child: AnimatedSwitcher(
-                    duration: const Duration(milliseconds: 200),
-                    transitionBuilder: (child, animation) =>
-                        ScaleTransition(scale: animation, child: child),
-                    child: widget.isLoading
-                        ? IconButton(
-                            key: const ValueKey('stop'),
-                            icon: const Icon(
-                              Icons.stop_circle_outlined,
-                              color: Colors.redAccent,
-                              size: 22,
-                            ),
-                            tooltip: 'Stop generation',
-                            onPressed: () {
-                              LocalLlmService.stopInference();
-                            },
-                          )
-                        : showSend
-                        ? IconButton(
-                            key: const ValueKey('send'),
-                            icon: const Icon(
-                              Icons.send_rounded,
-                              color: Colors.white,
-                              size: 20,
-                            ),
-                            onPressed: widget.onSendText,
-                          )
-                        : IconButton(
-                            key: const ValueKey('mic'),
-                            icon: Icon(
-                              _isRecording
-                                  ? Icons.stop_rounded
-                                  : Icons.mic_none_rounded,
-                              color: _isRecording
-                                  ? Colors.redAccent
-                                  : AppColors.cyberBlue,
-                              size: 22,
-                            ),
-                            onPressed: _toggleRecording,
+            // ── Center: TextField OR Waveform ──
+            Expanded(
+              child: AnimatedSwitcher(
+                duration: const Duration(milliseconds: 300),
+                child: _isRecording
+                    ? const Padding(
+                        key: ValueKey('wave'),
+                        padding: EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 14,
+                        ),
+                        child: _WaveformWidget(),
+                      )
+                    : TextField(
+                        key: const ValueKey('textfield'),
+                        controller: widget.textController,
+                        focusNode: widget.focusNode,
+                        maxLines: 5,
+                        minLines: 1,
+                        textCapitalization: TextCapitalization.sentences,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontFamily: 'Outfit',
+                          fontSize: 15,
+                        ),
+                        cursorColor: AppColors.cyberBlue,
+                        onTapOutside: (PointerDownEvent event) =>
+                            FocusManager.instance.primaryFocus?.unfocus(),
+                        decoration: const InputDecoration(
+                          hintText: 'Message Aitana...',
+                          hintStyle: TextStyle(
+                            color: Colors.white30,
+                            fontFamily: 'Outfit',
                           ),
+                          filled: true,
+                          fillColor: Colors.transparent,
+                          border: InputBorder.none,
+                          enabledBorder: InputBorder.none,
+                          focusedBorder: InputBorder.none,
+                          errorBorder: InputBorder.none,
+                          disabledBorder: InputBorder.none,
+                          isDense: true,
+                          contentPadding: EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 12,
+                          ),
+                        ),
+                      ),
+              ),
+            ),
+
+            // ── Right: action button ──
+            ValueListenableBuilder<bool>(
+              valueListenable: widget.isTypingNotifier,
+              builder: (context, isTyping, _) {
+                final showSend = isTyping || widget.selectedImagePath != null;
+                return Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    height: 44,
+                    width: 44,
+                    decoration: BoxDecoration(
+                      color: widget.isLoading
+                          ? Colors.grey[800]
+                          : _isRecording
+                          ? Colors.redAccent.withAlpha(30)
+                          : AppColors.cyberBlue.withAlpha(40),
+                      shape: BoxShape.circle,
+                      border: _isRecording
+                          ? Border.all(
+                              color: Colors.redAccent.withAlpha(160),
+                              width: 1.5,
+                            )
+                          : null,
+                    ),
+                    child: AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 200),
+                      transitionBuilder: (child, animation) =>
+                          ScaleTransition(scale: animation, child: child),
+                      child: widget.isLoading
+                          ? IconButton(
+                              key: const ValueKey('stop'),
+                              icon: const Icon(
+                                Icons.stop_circle_outlined,
+                                color: Colors.redAccent,
+                                size: 22,
+                              ),
+                              tooltip: 'Stop generation',
+                              onPressed: () {
+                                LocalLlmService.stopInference();
+                              },
+                            )
+                          : showSend
+                          ? IconButton(
+                              key: const ValueKey('send'),
+                              icon: const Icon(
+                                Icons.send_rounded,
+                                color: Colors.white,
+                                size: 20,
+                              ),
+                              onPressed: widget.onSendText,
+                            )
+                          : IconButton(
+                              key: const ValueKey('mic'),
+                              icon: Icon(
+                                _isRecording
+                                    ? Icons.stop_rounded
+                                    : Icons.mic_none_rounded,
+                                color: _isRecording
+                                    ? Colors.redAccent
+                                    : AppColors.cyberBlue,
+                                size: 22,
+                              ),
+                              onPressed: _toggleRecording,
+                            ),
+                    ),
                   ),
-                ),
-              );
-            },
-          ),
-        ],
+                );
+              },
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-// 🎙️ ANIMATED WAVEFORM WIDGET
+class _AttachmentPlusButton extends StatelessWidget {
+  final bool isOpen;
+  final bool isEnabled;
+  final VoidCallback onPressed;
+
+  const _AttachmentPlusButton({
+    required this.isOpen,
+    required this.isEnabled,
+    required this.onPressed,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final iconColor = isEnabled
+        ? const Color(0xFF00F0FF)
+        : Colors.white.withAlpha(76);
+
+    return Tooltip(
+      message: isOpen ? 'Close attachments' : 'Open attachments',
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOutCubic,
+        height: 44,
+        width: 44,
+        decoration: BoxDecoration(
+          color: isOpen
+              ? const Color(0x3300F0FF)
+              : AppColors.cyberBlue.withAlpha(40),
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: isOpen ? const Color(0x9900F0FF) : Colors.transparent,
+            width: 1,
+          ),
+          boxShadow: isOpen
+              ? const [
+                  BoxShadow(
+                    color: Color(0x3300F0FF),
+                    blurRadius: 12,
+                    spreadRadius: 1,
+                  ),
+                ]
+              : null,
+        ),
+        child: Material(
+          color: Colors.transparent,
+          shape: const CircleBorder(),
+          child: InkWell(
+            customBorder: const CircleBorder(),
+            onTap: isEnabled ? onPressed : null,
+            splashColor: const Color(0x3300F0FF),
+            highlightColor: const Color(0x1F00F0FF),
+            child: Center(
+              child: AnimatedRotation(
+                turns: isOpen ? 0.125 : 0,
+                duration: const Duration(milliseconds: 180),
+                curve: Curves.easeOutCubic,
+                child: Icon(Icons.add_rounded, color: iconColor, size: 27),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _WaveformWidget extends StatefulWidget {
   const _WaveformWidget();
 
