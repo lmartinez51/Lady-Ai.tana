@@ -5,6 +5,7 @@ import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
 import 'package:aitana/features/chat/services/llm/models/llm_inference_params.dart';
 import 'package:aitana/core/services/calendar/calendar_service.dart';
+import 'package:aitana/core/theme/persona_theme_router.dart';
 import 'package:aitana/features/geofencing/services/geofence_service.dart';
 import 'package:aitana/features/chat/services/llm/intent_interceptor.dart';
 import 'package:flutter/material.dart';
@@ -479,9 +480,7 @@ class LocalLlmService {
   static Future<ModelSwitchResult> autoSwitchModelForCategory(
     String category,
   ) async {
-    final targetBaseName = (category == 'LEGAL' || category == 'HUMAN')
-        ? 'gemma_4b_variant'
-        : 'gemma_4b';
+    final targetBaseName = PersonaThemeRouter.getModelBaseName(category);
 
     final target = AiModelCatalog.findByBaseName(targetBaseName);
     if (target == null) {

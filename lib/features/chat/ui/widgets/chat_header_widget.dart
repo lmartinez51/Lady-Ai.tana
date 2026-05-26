@@ -14,7 +14,7 @@ class ChatHeaderWidget extends StatelessWidget {
   final VoidCallback onClearMemoryPressed;
   final VoidCallback onExitPressed;
   final VoidCallback onLongPressPill;
-  final String personaCategory;
+  final Color personaColor;
 
   const ChatHeaderWidget({
     super.key,
@@ -23,25 +23,11 @@ class ChatHeaderWidget extends StatelessWidget {
     required this.onClearMemoryPressed,
     required this.onExitPressed,
     required this.onLongPressPill,
-    required this.personaCategory,
+    required this.personaColor,
   });
-
-  Color _getPersonaColor() {
-    switch (personaCategory) {
-      case 'AI':
-        return const Color(0xFFFFFFFF); // Cyberpunk Purple
-      case 'HUMAN':
-        return const Color(0xFF03DAC6); // Matrix Teal
-      case 'LEGAL':
-        return const Color(0xFFFFD700); // Prestige Gold
-      default:
-        return Colors.white;
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
-    final personaColor = _getPersonaColor();
     return SafeArea(
       bottom: false,
       child: Padding(
@@ -192,7 +178,7 @@ class ChatHeaderWidget extends StatelessWidget {
                         children: [
                           Icon(
                             Icons.swap_horiz_rounded,
-                            color: AppColors.cyberBlue,
+                            color: Colors.white70,
                             size: 20,
                           ),
                           SizedBox(width: 12),
@@ -254,7 +240,7 @@ class ChatHeaderWidget extends StatelessWidget {
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       border: Border.all(
-                        color: AppColors.cyberBlue.withAlpha(100),
+                        color: personaColor.withAlpha(100),
                         width: 1.5,
                       ),
                     ),
@@ -262,9 +248,9 @@ class ChatHeaderWidget extends StatelessWidget {
                       child: Image.asset(
                         'assets/images/aitana_avatar.webp',
                         fit: BoxFit.cover,
-                        errorBuilder: (_, _, _) => const Icon(
+                        errorBuilder: (_, _, _) => Icon(
                           Icons.face_retouching_natural,
-                          color: AppColors.cyberBlue,
+                          color: personaColor,
                         ),
                       ),
                     ),

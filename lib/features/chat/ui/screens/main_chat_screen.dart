@@ -3,6 +3,7 @@ import 'dart:async';
 import 'dart:ui';
 import 'package:aitana/core/domain/entities/chat_session.dart';
 import 'package:aitana/features/chat/services/llm/models/ai_model_catalog.dart';
+import 'package:aitana/core/theme/persona_theme_router.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
@@ -133,6 +134,10 @@ class _MainChatScreenState extends State<MainChatScreen>
     // living inside the service.
     DeviceEventService.onManualStop = _handleManualVideoStop;
     WidgetsBinding.instance.addObserver(this);
+    
+    ObjectBoxService.instance.personaManager.activeCategoryNotifier
+        .addListener(_onPersonaCategoryChanged);
+        
     // CRITICAL: Do NOT call setState here. Calling setState from a
     // TextEditingController listener causes the entire widget tree
     // (including the TextField itself) to rebuild mid-gesture, which
@@ -181,6 +186,8 @@ class _MainChatScreenState extends State<MainChatScreen>
 
   @override
   void dispose() {
+    ObjectBoxService.instance.personaManager.activeCategoryNotifier
+        .removeListener(_onPersonaCategoryChanged);
     WidgetsBinding.instance.removeObserver(this);
     _attachmentMenuRemovalTimer?.cancel();
     _attachmentMenuOverlayEntry?.remove();
@@ -222,6 +229,36 @@ class _MainChatScreenState extends State<MainChatScreen>
     setState(() {
       _chatHistory = ObjectBoxService.instance.getAllSessionsSorted();
     });
+  }
+
+  void _onPersonaCategoryChanged() {
+    if (_messages.isNotEmpty) {
+      final category = ObjectBoxService.instance.personaManager.activeCategoryNotifier.value;
+      
+      LocalLlmService.resetSessionState(
+        onClearUi: () {
+          if (mounted) {
+            _clearMessages();
+            setState(() {
+              _currentSessionId = null;
+              _needsSaving = false;
+            });
+            _refreshHistory();
+          }
+        },
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text(
+            'Context purged for persona shift.',
+            style: TextStyle(fontFamily: 'Outfit', color: Colors.black87),
+          ),
+          backgroundColor: PersonaThemeRouter.getThemeColor(category),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   /// Re-queries the Kotlin wake-source channel on every foreground resume.
@@ -424,12 +461,9 @@ class _MainChatScreenState extends State<MainChatScreen>
         // Read persona category once for the lifetime of this bottom sheet.
         final activeCategory = ObjectBoxService.instance.personaManager
             .getActivePersona()
-            .category;
+            .category.toUpperCase();
         final isRestrictedMode =
             activeCategory == 'LEGAL' || activeCategory == 'HUMAN';
-        final restrictionReason = activeCategory == 'LEGAL'
-            ? 'model locked for factual accuracy.'
-            : 'model locked for uncensored persona.';
 
         return SafeArea(
           child: ValueListenableBuilder<AiModelInfo>(
@@ -460,14 +494,12 @@ class _MainChatScreenState extends State<MainChatScreen>
                         children: [
                           Icon(
                             Icons.lock_outline,
-                            color: activeCategory == 'HUMAN'
-                                ? const Color(0xFF03DAC6)
-                                : const Color(0xFFFFD700),
+                            color: PersonaThemeRouter.getThemeColor(activeCategory),
                             size: 14,
                           ),
                           const SizedBox(width: 6),
                           Text(
-                            '${activeCategory == 'HUMAN' ? 'Human' : 'Legal'} Mode: $restrictionReason',
+                            '${activeCategory == 'HUMAN' ? 'Human' : 'Legal'} Mode: model locked for ${activeCategory == 'LEGAL' ? 'factual accuracy' : 'uncensored persona'}.',
                             style: TextStyle(
                               color: Colors.white.withAlpha(153),
                               fontFamily: 'Outfit',
@@ -479,9 +511,13 @@ class _MainChatScreenState extends State<MainChatScreen>
                     ),
                   ...AiModelCatalog.models.map((model) {
                     final isSelected = currentModel.baseName == model.baseName;
-                    // In Restricted Mode, only the variant model is selectable.
-                    final isDisabled =
-                        isRestrictedMode && model.baseName == 'gemma_4b';
+                    
+                    bool isDisabled = false;
+                    if (activeCategory == 'HUMAN' && model.baseName == 'gemma_4b') {
+                      isDisabled = true;
+                    } else if (activeCategory == 'LEGAL' && model.baseName == 'gemma_4b_variant') {
+                      isDisabled = true;
+                    }
 
                     return Opacity(
                       opacity: isDisabled ? 0.4 : 1.0,
@@ -1330,7 +1366,7 @@ class _MainChatScreenState extends State<MainChatScreen>
               ObjectBoxService.instance.personaManager.activeCategoryNotifier,
           builder: (context, category, child) {
             return ChatHeaderWidget(
-              personaCategory: category,
+              personaColor: PersonaThemeRouter.getThemeColor(category),
               onMenuPressed: () => _scaffoldKey.currentState?.openDrawer(),
               onModelSelectorPressed: _showModelSelector,
               onClearMemoryPressed: () async {
@@ -1370,12 +1406,18 @@ class _MainChatScreenState extends State<MainChatScreen>
   Widget _buildMessageBody() {
     return Expanded(
       child: RepaintBoundary(
-        child: _ChatMessageViewport(
-          messagesListenable: _messagesNotifier,
-          scrollController: _scrollController,
-          userBubbleColor: _userBubbleColor,
-          vaultStateListenable: _vaultContinuationState,
-          firstTokenWaitListenable: _isWaitingForFirstToken,
+        child: ValueListenableBuilder<String>(
+          valueListenable: ObjectBoxService.instance.personaManager.activeCategoryNotifier,
+          builder: (context, category, child) {
+            return _ChatMessageViewport(
+              messagesListenable: _messagesNotifier,
+              scrollController: _scrollController,
+              userBubbleColor: _userBubbleColor,
+              vaultStateListenable: _vaultContinuationState,
+              firstTokenWaitListenable: _isWaitingForFirstToken,
+              accentColor: PersonaThemeRouter.getThemeColor(category),
+            );
+          },
         ),
       ),
     );
@@ -1970,13 +2012,19 @@ class _MainChatScreenState extends State<MainChatScreen>
                 if (!isEngineBusy && !isGenerating) {
                   return const SizedBox.shrink();
                 }
-                return SystemLockOverlay(
-                  title: isEngineBusy
-                      ? "Neural Core Engine Busy"
-                      : "Neural Core Active",
-                  subtitle: isEngineBusy
-                      ? "Reconfiguring memory for high-performance inference..."
-                      : "Local inference stream is running...",
+                return ValueListenableBuilder<String>(
+                  valueListenable: ObjectBoxService.instance.personaManager.activeCategoryNotifier,
+                  builder: (context, category, child) {
+                    return SystemLockOverlay(
+                      title: isEngineBusy
+                          ? "Neural Core Engine Busy"
+                          : "Neural Core Active",
+                      subtitle: isEngineBusy
+                          ? "Reconfiguring memory for high-performance inference..."
+                          : "Local inference stream is running...",
+                      baseColor: PersonaThemeRouter.getThemeColor(category),
+                    );
+                  },
                 );
               },
             );
@@ -2010,6 +2058,7 @@ class _ChatMessageViewport extends StatelessWidget {
   final Color userBubbleColor;
   final ValueListenable<_VaultContinuationState> vaultStateListenable;
   final ValueListenable<bool> firstTokenWaitListenable;
+  final Color accentColor;
 
   const _ChatMessageViewport({
     required this.messagesListenable,
@@ -2017,6 +2066,7 @@ class _ChatMessageViewport extends StatelessWidget {
     required this.userBubbleColor,
     required this.vaultStateListenable,
     required this.firstTokenWaitListenable,
+    required this.accentColor,
   });
 
   @override
@@ -2068,6 +2118,7 @@ class _ChatMessageViewport extends StatelessWidget {
           child: _InferenceFooterStatus(
             vaultStateListenable: vaultStateListenable,
             firstTokenWaitListenable: firstTokenWaitListenable,
+            accentColor: accentColor,
           ),
         ),
       ],
@@ -2170,10 +2221,12 @@ class _ChatAtmospherePainter extends CustomPainter {
 class _InferenceFooterStatus extends StatelessWidget {
   final ValueListenable<_VaultContinuationState> vaultStateListenable;
   final ValueListenable<bool> firstTokenWaitListenable;
+  final Color accentColor;
 
   const _InferenceFooterStatus({
     required this.vaultStateListenable,
     required this.firstTokenWaitListenable,
+    required this.accentColor,
   });
 
   @override
@@ -2193,12 +2246,14 @@ class _InferenceFooterStatus extends StatelessWidget {
                     builder: (context, isWaitingForFirstToken, _) {
                       final Widget child;
                       if (vaultState != _VaultContinuationState.idle) {
-                        child = const _FooterThinkingPill(
-                          key: ValueKey('vault-dots'),
+                        child = _FooterThinkingPill(
+                          key: const ValueKey('vault-dots'),
+                          accentColor: accentColor,
                         );
                       } else if (isGenerating && isWaitingForFirstToken) {
-                        child = const _FooterThinkingPill(
-                          key: ValueKey('decode-dots'),
+                        child = _FooterThinkingPill(
+                          key: const ValueKey('decode-dots'),
+                          accentColor: accentColor,
                         );
                       } else {
                         child = const SizedBox.shrink(
@@ -2255,33 +2310,35 @@ class _EmptyChatPlaceholder extends StatelessWidget {
 }
 
 class _FooterThinkingPill extends StatelessWidget {
-  const _FooterThinkingPill({super.key});
+  final Color accentColor;
+
+  const _FooterThinkingPill({super.key, required this.accentColor});
 
   @override
   Widget build(BuildContext context) {
     return RepaintBoundary(
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-        decoration: const BoxDecoration(
+        decoration: BoxDecoration(
           color: _kChatObsidian,
-          borderRadius: BorderRadius.only(
+          borderRadius: const BorderRadius.only(
             topLeft: Radius.circular(16),
             topRight: Radius.circular(16),
             bottomRight: Radius.circular(16),
             bottomLeft: Radius.circular(4),
           ),
           border: Border.fromBorderSide(
-            BorderSide(color: Color(0x8000F0FF), width: 1),
+            BorderSide(color: accentColor.withAlpha(128), width: 1), // 0x80
           ),
           boxShadow: [
             BoxShadow(
-              color: Color(0x4000F0FF),
+              color: accentColor.withAlpha(64), // 0x40
               blurRadius: 18,
               spreadRadius: 1,
             ),
           ],
         ),
-        child: const SpinKitThreeBounce(color: Color(0xFF00F0FF), size: 18),
+        child: SpinKitThreeBounce(color: accentColor, size: 18),
       ),
     );
   }

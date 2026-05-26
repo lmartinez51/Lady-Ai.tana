@@ -7,11 +7,13 @@ class SystemLockOverlay extends StatefulWidget {
   final String subtitle;
   final bool showSpinner;
   final Color? overlayColor;
+  final Color baseColor;
 
   const SystemLockOverlay({
     super.key,
     required this.title,
     required this.subtitle,
+    required this.baseColor,
     this.showSpinner = true,
     this.overlayColor,
   });
@@ -49,7 +51,7 @@ class _SystemLockOverlayState extends State<SystemLockOverlay>
           left: 0,
           right: 0,
           height: 120,
-          child: _CoreGlowBand(animation: _glowController),
+          child: _CoreGlowBand(animation: _glowController, baseColor: widget.baseColor),
         ),
       ],
     );
@@ -58,8 +60,9 @@ class _SystemLockOverlayState extends State<SystemLockOverlay>
 
 class _CoreGlowBand extends StatelessWidget {
   final Animation<double> animation;
+  final Color baseColor;
 
-  const _CoreGlowBand({required this.animation});
+  const _CoreGlowBand({required this.animation, required this.baseColor});
 
   @override
   Widget build(BuildContext context) {
@@ -77,31 +80,31 @@ class _CoreGlowBand extends StatelessWidget {
                 gradient: LinearGradient(
                   begin: Alignment(beginX, -1),
                   end: Alignment(endX, 1),
-                  colors: const [
-                    Color(0xCC2A0F6E),
-                    Color(0xD900F0FF),
-                    Color(0xCC111827),
+                  colors: [
+                    const Color(0xCC2A0F6E),
+                    baseColor.withAlpha(217), // 0xD9
+                    const Color(0xCC111827),
                   ],
                   stops: const [0.0, 0.48, 1.0],
                 ),
-                boxShadow: const [
+                boxShadow: [
                   BoxShadow(
-                    color: Color(0x7300F0FF),
+                    color: baseColor.withAlpha(115), // 0x73
                     blurRadius: 34,
                     spreadRadius: -12,
-                    offset: Offset(0, 18),
+                    offset: const Offset(0, 18),
                   ),
                 ],
               ),
-              child: const DecoratedBox(
+              child: DecoratedBox(
                 decoration: BoxDecoration(
                   gradient: LinearGradient(
                     begin: Alignment.topCenter,
                     end: Alignment.bottomCenter,
                     colors: [
-                      Color(0x2200F0FF),
-                      Color(0x660B0D17),
-                      Color(0x000B0D17),
+                      baseColor.withAlpha(34), // 0x22
+                      const Color(0x660B0D17),
+                      const Color(0x000B0D17),
                     ],
                     stops: [0.0, 0.62, 1.0],
                   ),

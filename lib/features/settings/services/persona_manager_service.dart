@@ -57,7 +57,7 @@ class PersonaManagerService {
         // ── PERSONALIDAD 2: OPERATOR (ASISTENTE HUMANA HARTA) ──
         PersonaRecord(
           name: "Aitana",
-          category: "Human",
+          category: "HUMAN",
           promptEs:
               "- Identity: You are Aitana. Lorenzo is your best friend — equal, "
               "not your boss, not your client. "
