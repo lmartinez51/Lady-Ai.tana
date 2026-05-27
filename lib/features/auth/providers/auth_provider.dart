@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:aitana/core/constants/native_channels.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:flutter/services.dart';
+import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 
 enum AuthStatus {
   initial,
@@ -59,8 +60,8 @@ class AuthProvider extends ChangeNotifier {
       // 🕵️‍♂️ PREGUNTAR A KOTLIN SI VENIMOS DE UN COMANDO DE VOZ
       try {
         const platform = MethodChannel(NativeChannels.aiCore);
-        _isWokenByNexus =
-            await platform.invokeMethod('checkWakeSource') ?? false;
+        _isWokenByNexus = LocalLlmService.isWokenByVoiceOnStartup ||
+            (await platform.invokeMethod('checkWakeSource') ?? false);
 
         if (_isWokenByNexus) {
           // ¡Bypass autorizado! Se saltan la huella y entran directo.

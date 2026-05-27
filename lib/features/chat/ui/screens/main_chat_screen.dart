@@ -115,6 +115,12 @@ class _MainChatScreenState extends State<MainChatScreen>
 
   bool _isVoiceWakeSession = false;
 
+  /// Set to `true` by [_checkForNexusWakeOnResume] when a Nexus wake-word
+  /// event is detected. Consumed by [_onPersonaCategoryChanged] **after**
+  /// the model hot-swap is fully confirmed, guaranteeing the auto-greeting
+  /// is dispatched only into a live, ready engine.
+  bool _pendingNexusGreeting = false;
+
   // --- ESTADO DINÁMICO (PREPARACIÓN FASE 5) ---
   // Model state is now managed by LocalLlmService.currentModel
 
@@ -134,10 +140,11 @@ class _MainChatScreenState extends State<MainChatScreen>
     // living inside the service.
     DeviceEventService.onManualStop = _handleManualVideoStop;
     WidgetsBinding.instance.addObserver(this);
-    
-    ObjectBoxService.instance.personaManager.activeCategoryNotifier
-        .addListener(_onPersonaCategoryChanged);
-        
+
+    ObjectBoxService.instance.personaManager.activeCategoryNotifier.addListener(
+      _onPersonaCategoryChanged,
+    );
+
     // CRITICAL: Do NOT call setState here. Calling setState from a
     // TextEditingController listener causes the entire widget tree
     // (including the TextField itself) to rebuild mid-gesture, which
@@ -231,11 +238,39 @@ class _MainChatScreenState extends State<MainChatScreen>
     });
   }
 
-  void _onPersonaCategoryChanged() {
+  void _onPersonaCategoryChanged() async {
+    final personaManager = ObjectBoxService.instance.personaManager;
+    final activePersona = personaManager.getActivePersona();
+    final category = activePersona.category;
+
+    // ── Step 1: Unconditionally synchronize language and engine ──────────────
+    //
+    // This is the Single Actor for all engine operations. Both normal persona
+    // switches and Nexus wake-word flows are handled here, in the correct order.
+    try {
+      await LocalLlmService.setLanguageOverride(
+        activePersona.defaultLang,
+        resetContext: false,
+      );
+      // [AWAIT] The model hot-swap is now fully confirmed when this returns.
+      // No other code path may dispatch engine commands until this completes.
+      await LocalLlmService.autoSwitchModelForCategory(category);
+    } catch (e) {
+      debugPrint('🔴 [PersonaChanged] Engine sync failed: $e');
+      // If the engine swap fails, clear the greeting flag so we do not attempt
+      // to send a message into a potentially broken engine state.
+      _pendingNexusGreeting = false;
+      return;
+    }
+
+    // ── Step 2: Conditionally purge conversation context ─────────────────────
+    //
+    // [AWAIT] resetSessionState is awaited to ensure resetConversation on the
+    // native layer completes before Step 3 dispatches a new message. An
+    // unawaited fire-and-forget call here would cause NO_MODEL_LOADED errors
+    // if the Conversation object is still being closed when sendMessage arrives.
     if (_messages.isNotEmpty) {
-      final category = ObjectBoxService.instance.personaManager.activeCategoryNotifier.value;
-      
-      LocalLlmService.resetSessionState(
+      await LocalLlmService.resetSessionState(
         onClearUi: () {
           if (mounted) {
             _clearMessages();
@@ -248,15 +283,34 @@ class _MainChatScreenState extends State<MainChatScreen>
         },
       );
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: const Text(
-            'Context purged for persona shift.',
-            style: TextStyle(fontFamily: 'Outfit', color: Colors.black87),
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Context purged for persona shift.',
+              style: TextStyle(fontFamily: 'Outfit', color: Colors.black87),
+            ),
+            backgroundColor: PersonaThemeRouter.getThemeColor(category),
+            duration: const Duration(seconds: 2),
           ),
-          backgroundColor: PersonaThemeRouter.getThemeColor(category),
-          duration: const Duration(seconds: 2),
-        ),
+        );
+      }
+    }
+
+    // ── Step 3: Consume pending Nexus greeting ────────────────────────────────
+    //
+    // This executes ONLY after the model swap (Step 1) and context purge
+    // (Step 2) are both confirmed complete. The engine is guaranteed ready.
+    // The guard on category == 'AI' provides a final safety check: if the
+    // DB write somehow landed on a non-AI persona, we never send the greeting.
+    if (_pendingNexusGreeting && category == 'AI' && mounted) {
+      _pendingNexusGreeting = false;
+      debugPrint(
+        '🎙️ [PersonaChanged] Nexus greeting dispatched — '
+        'engine confirmed ready for AI persona.',
+      );
+      await _sendMessage(
+        autoText: "¡Hola Aitana! Necesito que hagas algo por mi.",
       );
     }
   }
@@ -269,6 +323,16 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// by [WidgetsBindingObserver], fills that gap by directly invoking
   /// [checkWakeSource] without going through the full [AuthProvider]
   /// biometric flow again.
+  /// Re-queries the Kotlin wake-source channel on every foreground resume.
+  ///
+  /// **Single-Actor Architecture:** This method is intentionally a pure trigger.
+  /// It sets [_pendingNexusGreeting] and forces the ObjectBox persona to `AI`.
+  /// ALL engine interaction (model swap, context purge, greeting dispatch) is
+  /// delegated to [_onPersonaCategoryChanged], which is the single actor that
+  /// owns the engine transition. This prevents the two-actor concurrency bug
+  /// that caused `PlatformException(NO_MODEL_LOADED)`: previously, both this
+  /// method and the reactive listener raced to issue engine commands after
+  /// a single `setActivePersona()` call.
   Future<void> _checkForNexusWakeOnResume() async {
     if (!mounted) return;
     // Do not interrupt an active LLM inference or an ongoing recording session.
@@ -283,11 +347,28 @@ class _MainChatScreenState extends State<MainChatScreen>
 
       _hasFiredAutoGreeting = true;
       _isVoiceWakeSession = true;
-      await _sendMessage(
-        autoText: "¡Hola Aitana! Necesito que hagas algo por mi.",
+
+      // Signal the reactive listener to dispatch the greeting once the
+      // engine swap is confirmed. This must be set BEFORE setActivePersona()
+      // so the listener sees it when it fires.
+      _pendingNexusGreeting = true;
+
+      // Force the active persona to "AI". This synchronously fires
+      // activeCategoryNotifier, which triggers _onPersonaCategoryChanged.
+      // That listener is now the sole owner of all subsequent engine work.
+      final personaManager = ObjectBoxService.instance.personaManager;
+      final aiPersona = personaManager.getAllPersonas().firstWhere(
+        (p) => p.category == 'AI',
       );
+      personaManager.setActivePersona(aiPersona.id);
+
+      // ← Method exits here. No engine calls. No awaits on engine state.
+      // _onPersonaCategoryChanged handles everything from this point forward.
     } catch (e) {
-      debugPrint('🔴 Nexus wake-on-resume check failed: $e');
+      // On any failure, clear the flag so a stale greeting is not dispatched
+      // on the next unrelated persona switch.
+      _pendingNexusGreeting = false;
+      debugPrint('🔴 [NexusWake] Resume check failed: $e');
     }
   }
 
@@ -461,7 +542,8 @@ class _MainChatScreenState extends State<MainChatScreen>
         // Read persona category once for the lifetime of this bottom sheet.
         final activeCategory = ObjectBoxService.instance.personaManager
             .getActivePersona()
-            .category.toUpperCase();
+            .category
+            .toUpperCase();
         final isRestrictedMode =
             activeCategory == 'LEGAL' || activeCategory == 'HUMAN';
 
@@ -494,7 +576,9 @@ class _MainChatScreenState extends State<MainChatScreen>
                         children: [
                           Icon(
                             Icons.lock_outline,
-                            color: PersonaThemeRouter.getThemeColor(activeCategory),
+                            color: PersonaThemeRouter.getThemeColor(
+                              activeCategory,
+                            ),
                             size: 14,
                           ),
                           const SizedBox(width: 6),
@@ -511,11 +595,13 @@ class _MainChatScreenState extends State<MainChatScreen>
                     ),
                   ...AiModelCatalog.models.map((model) {
                     final isSelected = currentModel.baseName == model.baseName;
-                    
+
                     bool isDisabled = false;
-                    if (activeCategory == 'HUMAN' && model.baseName == 'gemma_4b') {
+                    if (activeCategory == 'HUMAN' &&
+                        model.baseName == 'gemma_4b') {
                       isDisabled = true;
-                    } else if (activeCategory == 'LEGAL' && model.baseName == 'gemma_4b_variant') {
+                    } else if (activeCategory == 'LEGAL' &&
+                        model.baseName == 'gemma_4b_variant') {
                       isDisabled = true;
                     }
 
@@ -1407,7 +1493,8 @@ class _MainChatScreenState extends State<MainChatScreen>
     return Expanded(
       child: RepaintBoundary(
         child: ValueListenableBuilder<String>(
-          valueListenable: ObjectBoxService.instance.personaManager.activeCategoryNotifier,
+          valueListenable:
+              ObjectBoxService.instance.personaManager.activeCategoryNotifier,
           builder: (context, category, child) {
             return _ChatMessageViewport(
               messagesListenable: _messagesNotifier,
@@ -2013,7 +2100,10 @@ class _MainChatScreenState extends State<MainChatScreen>
                   return const SizedBox.shrink();
                 }
                 return ValueListenableBuilder<String>(
-                  valueListenable: ObjectBoxService.instance.personaManager.activeCategoryNotifier,
+                  valueListenable: ObjectBoxService
+                      .instance
+                      .personaManager
+                      .activeCategoryNotifier,
                   builder: (context, category, child) {
                     return SystemLockOverlay(
                       title: isEngineBusy

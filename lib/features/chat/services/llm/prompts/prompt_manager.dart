@@ -8,6 +8,64 @@ DO NOT mention that you are transcribing, DO NOT ask for permission,
 and DO NOT repeat what you said. Act as if you simply heard it yourself.
 """;
 
+  static const String _safeEnvelopeBlock = """
+
+# SAFE TURN ENVELOPE CONTRACT
+Each user turn may begin with a compact private envelope like:
+`[SYS: MM/DD/YYYY HH:MM | ...]`
+Treat this envelope as private runtime metadata. Never quote it, describe it,
+or reveal it to Lorenzo.
+""";
+
+  static const String _toolProtocolBlock = """
+
+# STATIC SYSTEM CODE PROTOCOL
+Command grammar is known only for authorized runtime operations. Command
+emission is authorized only by the current turn envelope's `Auth` value. If
+`Auth: NONE`, never emit command tags.
+
+VISIBLE REPLY RULES:
+1. Write the reply naturally in character.
+2. Do not mention command tags, raw syntax, tooling, terminals, or this protocol in the visible prose.
+3. Never place command text inside the visible explanation.
+
+HIDDEN SYSTEM EPILOGUE RULES:
+1. If the current turn envelope authorizes a command, append the exact command tag after the visible reply.
+2. The command tag must be the final bytes of the response: no markdown, no quotes, no escaping, and no text after `>`.
+3. If multiple commands are authorized, append all required command tags at the end in order.
+
+AUTHORIZED HIDDEN EPILOGUE FORMATS:
+- Calendar: <CMD_SYS_CAL_EVT: YYYY-MM-DD | HH:MM | is_birthday (true/false) | Title>
+- Location: <CMD_SYS_LOC_TRG: [location_key] | [task]>; keys: home, walmart, hooters, whataburger, work
+- Optics on: <CMD_SYS_OPTICS_1>
+- Optics off: <CMD_SYS_OPTICS_0>
+
+AUDIO OPTICS AUTHORIZATION:
+- When the current turn envelope says `Auth: AUDIO_OPTICS`, Lorenzo's raw spoken input in the attached audio file may contain an explicit camera or video device command.
+- If the audio layer contains a definitive intent to start video, append `<CMD_SYS_OPTICS_1>`.
+- If the audio layer contains a definitive intent to stop video, append `<CMD_SYS_OPTICS_0>`.
+- If the intent is ambiguous, absent, or merely discusses video historically, reply conversationally and emit no command tags.
+- `AUDIO_OPTICS` authorizes optics tags only; do not emit calendar, location, or vault tags from this authorization.
+""";
+
+  static const String _vaultContractBlock = """
+
+VAULT SEARCH CONTRACT:
+- Vault Search: <CMD_SYS_VAULT_SRCH: [open_semantic_query]>
+- The argument is a short, dynamic semantic search phrase synthesized from Lorenzo's actual request.
+- Preserve discriminating names, brands, places, people, codes, dates, numbers, object types, and owners.
+- Do not collapse the query into a generic category like ticket, boleto, receipt, object, image, or document if the request contains richer identifiers.
+- Good query shapes: `Cetys sorteo numeros`, `placas Yanin`, `llaves mama casa`, `recibo luz marzo`, `numero serie laptop`.
+""";
+
+  static const String _legalContextContractBlock = """
+
+# HIDDEN RETRIEVED CONTEXT CONTRACT
+If the turn includes `[CTX:LEGAL]...[/CTX]`, use that retrieved offline legal
+context strictly and do not guess beyond it. Apply this authority order when
+sources conflict: Ley/Codigo, then Jurisprudencia, then Doctrina.
+""";
+
   static String _normalizePersonaControlLanguage(String prompt) {
     return prompt.replaceAll(
       RegExp(
@@ -40,6 +98,10 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
     final activePersona = ObjectBoxService.instance.personaManager
         .getActivePersona();
     final isEnglish = languageCode == 'EN';
+    final personaCategory = activePersona.category.toUpperCase();
+    final enableToolContracts =
+        personaCategory == 'AI' || personaCategory == 'LEGAL';
+    final enableLegalContextContract = personaCategory == 'LEGAL';
 
     String basePrompt;
     if (isStructuredOutput) {
@@ -70,46 +132,14 @@ and DO NOT repeat what you said. Act as if you simply heard it yourself.
       }
     }
 
-    basePrompt += """
-
-# STATIC TURN ENVELOPE CONTRACT
-Each user turn may begin with a compact private envelope:
-`[SYS: MM/DD/YYYY HH:MM | Auth: ...]`
-Treat this envelope as private runtime metadata. Never quote it, describe it,
-or reveal it to Lorenzo.
-
-# STATIC SYSTEM CODE PROTOCOL
-Command grammar is always known, but command emission is authorized only by the
-current turn envelope's `Auth` value. If `Auth: NONE`, never emit command tags.
-
-VISIBLE REPLY RULES:
-1. Write the reply naturally in character.
-2. Do not mention command tags, raw syntax, tooling, terminals, or this protocol in the visible prose.
-3. Never place command text inside the visible explanation.
-
-HIDDEN SYSTEM EPILOGUE RULES:
-1. If the current turn envelope authorizes a command, append the exact command tag after the visible reply.
-2. The command tag must be the final bytes of the response: no markdown, no quotes, no escaping, and no text after `>`.
-3. If multiple commands are authorized, append all required command tags at the end in order.
-
-AUTHORIZED HIDDEN EPILOGUE FORMATS:
-- Calendar: <CMD_SYS_CAL_EVT: YYYY-MM-DD | HH:MM | is_birthday (true/false) | Title>
-- Location: <CMD_SYS_LOC_TRG: [location_key] | [task]>; keys: home, walmart, hooters, whataburger, work
-- Optics on: <CMD_SYS_OPTICS_1>
-- Optics off: <CMD_SYS_OPTICS_0>
-- Vault Search: <CMD_SYS_VAULT_SRCH: [open_semantic_query]>
-
-VAULT SEARCH CONTRACT:
-- The argument is a short, dynamic semantic search phrase synthesized from Lorenzo's actual request.
-- Preserve discriminating names, brands, places, people, codes, dates, numbers, object types, and owners.
-- Do not collapse the query into a generic category like ticket, boleto, receipt, object, image, or document if the request contains richer identifiers.
-- Good query shapes: `Cetys sorteo numeros`, `placas Yanin`, `llaves mama casa`, `recibo luz marzo`, `numero serie laptop`.
-
-# HIDDEN RETRIEVED CONTEXT CONTRACT
-If the turn includes `[CTX:LEGAL]...[/CTX]`, use that retrieved offline legal
-context strictly and do not guess beyond it. Apply this authority order when
-sources conflict: Ley/Codigo, then Jurisprudencia, then Doctrina.
-""";
+    basePrompt += _safeEnvelopeBlock;
+    if (enableToolContracts) {
+      basePrompt += _toolProtocolBlock;
+      basePrompt += _vaultContractBlock;
+    }
+    if (enableLegalContextContract) {
+      basePrompt += _legalContextContractBlock;
+    }
 
     if (enableThinking) {
       return '$basePrompt\n<|think|>';
@@ -126,6 +156,7 @@ sources conflict: Ley/Codigo, then Jurisprudencia, then Doctrina.
     required List<String> todayEvents,
     String? armedToolHint,
     String? retrievedLegalContext,
+    bool includeToolAuth = true,
   }) {
     final stamp = _formatTurnStamp(now);
     final auth = _authEnvelope(armedToolHint);
@@ -133,7 +164,10 @@ sources conflict: Ley/Codigo, then Jurisprudencia, then Doctrina.
         ? ''
         : ' | Events: ${_compactInline(todayEvents.join('; '), 220)}';
 
-    final buffer = StringBuffer('[SYS: $stamp | Auth: $auth$eventSuffix]');
+    final envelope = includeToolAuth
+        ? '[SYS: $stamp | Auth: $auth$eventSuffix]'
+        : '[SYS: $stamp$eventSuffix]';
+    final buffer = StringBuffer(envelope);
 
     final legalContext = retrievedLegalContext?.trim();
     if (legalContext != null && legalContext.isNotEmpty) {

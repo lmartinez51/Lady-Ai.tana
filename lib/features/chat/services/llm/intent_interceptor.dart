@@ -4,11 +4,18 @@ import 'package:flutter/foundation.dart';
 /// This reduces the model's cognitive load and enforces strict tool usage
 /// rules prior to hitting the native engine.
 class IntentInterceptor {
-  // ─── Dictionaries & Regex Patterns ────────────────────────────────────────
+  static const String _cameraVerbFragment =
+      r'(?:toma(?:me)?|tomar|graba(?:me)?|grabar|enciende|prende|abre|activa|open|turn on|run|record|take)';
+  static const String _cameraTargetFragment =
+      r'(?:video|camara|camera|feed|grabacion|optics)';
 
-  // Hardware Keywords (Flexibilidad para tildes y formas de decirlo)
+  // Hardware keywords. Evaluated after normalization, so this catches
+  // "tomame un video corto", "[toma el video]", and "enciende camara".
   static final RegExp _hardwareRegex = RegExp(
-    r'\b(toma video|tomar video|graba|grabar|grabame|grábame|empieza a grabar|pon a grabar|record video|camera feed|video interface|turn on the video|take a video|open the camera|video feed|run the camera)\b',
+    r'\b(?:empieza|pon|ponte)\s+a\s+grabar\b|'
+    r'\b(?:camera feed|video feed|video interface)\b|'
+    '\\b$_cameraVerbFragment\\b(?:\\s+\\w+){0,5}\\s+\\b$_cameraTargetFragment\\b|'
+    r'\b(?:graba(?:me)?|grabar|record)\b(?:\s+\w+){0,4}',
     caseSensitive: false,
     unicode: true,
   );
@@ -21,7 +28,7 @@ class IntentInterceptor {
   );
 
   static final RegExp _calendarQueryVerbsRegex = RegExp(
-    r'\b(qu[eé] tengo|dime|revisa|what do i have|check)\b',
+    r'\b(que tengo|dime|revisa|what do i have|check)\b',
     caseSensitive: false,
     unicode: true,
   );
@@ -33,106 +40,141 @@ class IntentInterceptor {
     unicode: true,
   );
 
-  // Geofence Keywords (Slang norteño/fronterizo, sin tildes, El Paso/Juárez)
+  // Geofence Keywords (normalized Spanish slang and border locations)
   static final RegExp _geofenceLocationRegex = RegExp(
-    r'\b(work|home|walmart|hooters|whataburger|trabajo|casa|oficina|jale|chamba|cant[oó]n|el paso|ju[aá]rez|chuco)\b',
+    r'\b(work|home|walmart|hooters|whataburger|trabajo|casa|oficina|jale|chamba|canton|el paso|juarez|chuco)\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // Spatial Triggers (Gatillos espaciales clave para geocercas)
+  // Spatial Triggers (key location triggers for geofences)
   static final RegExp _geofenceTriggersRegex = RegExp(
     r'\b(llegando|llegar|llegue|cuando ande|en cuanto llegue|al llegar)\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // General Action Verbs used in both Geofence and Calendar
-  // Incluye "recordatorio", modismos como "tira paro", "echame un grito"
+  // General Action Verbs used in both Geofence and Calendar.
   static final RegExp _actionVerbsRegex = RegExp(
-    r'\b(av[ií]same|recu[eé]rdame|remind|notify|tell|acu[eé]rdame|recordatorio|avisa|recuerda|acuerda|tira paro|hazme el paro|echame un grito|[eé]chame un grito)(?:lo|la|los|las|le|les|me)?\b',
+    r'\b(avisame|recuerdame|remind|notify|tell|acuerdame|recordatorio|avisa|recuerda|acuerda|tira paro|hazme el paro|echame un grito)(?:lo|la|los|las|le|les|me)?\b',
     caseSensitive: false,
     unicode: true,
   );
 
   // Implicit Time Markers
   static final RegExp _timeMarkersRegex = RegExp(
-    r'\b(ma[ñn]ana|hoy|a las|pm|am|lunes|martes|mi[eé]rcoles|jueves|viernes|s[aá]bado|domingo|tomorrow|today)\b',
+    r'\b(manana|hoy|a las|pm|am|lunes|martes|miercoles|jueves|viernes|sabado|domingo|tomorrow|today)\b',
     caseSensitive: false,
     unicode: true,
   );
 
   static final RegExp _vaultRegex = RegExp(
-    r'\b(bóveda|boveda|vault|mis fotos|mis recibos|mi boveda|personal vault|receipts|documents|analyzed images|search vault)\b',
+    r'\b(boveda|vault|mis fotos|mis recibos|mi boveda|personal vault|receipts|documents|analyzed images|search vault)\b',
     caseSensitive: false,
     unicode: true,
   );
 
-  // ─── Main Intercept Method ────────────────────────────────────────────────
+  static String _normalizePrompt(String prompt) {
+    var normalized = prompt.toLowerCase();
+
+    normalized = normalized.replaceAll(
+      RegExp(
+        r'\[(?:risa|risas|laughs?|laughter|silencio|noise|ruido)\]',
+        caseSensitive: false,
+      ),
+      ' ',
+    );
+    normalized = normalized.replaceAll(RegExp(r'[\[\]\(\)\{\}]'), ' ');
+    normalized = normalized.replaceAll(
+      RegExp('[\u00e1\u00e0\u00e4\u00e2\u00e3]'),
+      'a',
+    );
+    normalized = normalized.replaceAll(
+      RegExp('[\u00e9\u00e8\u00eb\u00ea]'),
+      'e',
+    );
+    normalized = normalized.replaceAll(
+      RegExp('[\u00ed\u00ec\u00ef\u00ee]'),
+      'i',
+    );
+    normalized = normalized.replaceAll(
+      RegExp('[\u00f3\u00f2\u00f6\u00f4\u00f5]'),
+      'o',
+    );
+    normalized = normalized.replaceAll(
+      RegExp('[\u00fa\u00f9\u00fc\u00fb]'),
+      'u',
+    );
+    normalized = normalized.replaceAll(RegExp('[\u00f1]'), 'n');
+    normalized = normalized.replaceAll(RegExp(r'[^a-z0-9_\s]'), ' ');
+    normalized = normalized.replaceAll(RegExp(r'\s+'), ' ').trim();
+
+    return normalized;
+  }
 
   static String processPrompt(String originalPrompt) {
-    final lowerPrompt = originalPrompt.toLowerCase();
+    final normalizedPrompt = _normalizePrompt(originalPrompt);
     final List<String> hints = [];
 
-    // 1. HARDWARE (Evaluated first, does not block others)
-    if (_hardwareRegex.hasMatch(lowerPrompt)) {
-      debugPrint('🧠 [IntentInterceptor] Hardware match detected.');
+    // 1. HARDWARE (evaluated first, does not block others)
+    if (_hardwareRegex.hasMatch(normalizedPrompt)) {
+      debugPrint('[IntentInterceptor] Hardware match detected.');
       hints.add('USE <CMD_SYS_OPTICS_1>');
     }
 
     bool geofenceDetected = false;
 
     // 2. GEOFENCE
-    // Dispara si encuentra el lugar (jale, cantón) Y alguna acción, gatillo espacial o verbo de agenda (ej. "ponme" + "cuando llegue")
-    if (_geofenceLocationRegex.hasMatch(lowerPrompt) &&
-        (_actionVerbsRegex.hasMatch(lowerPrompt) ||
-            _geofenceTriggersRegex.hasMatch(lowerPrompt) ||
-            (_calendarActionVerbsRegex.hasMatch(lowerPrompt) &&
-                _geofenceTriggersRegex.hasMatch(lowerPrompt)))) {
-      debugPrint('🧠 [IntentInterceptor] Geofence match detected.');
+    // Space wins when a location plus action/spatial trigger is detected.
+    if (_geofenceLocationRegex.hasMatch(normalizedPrompt) &&
+        (_actionVerbsRegex.hasMatch(normalizedPrompt) ||
+            _geofenceTriggersRegex.hasMatch(normalizedPrompt) ||
+            (_calendarActionVerbsRegex.hasMatch(normalizedPrompt) &&
+                _geofenceTriggersRegex.hasMatch(normalizedPrompt)))) {
+      debugPrint('[IntentInterceptor] Geofence match detected.');
       hints.add('USE <CMD_SYS_LOC_TRG>. SPACE ALWAYS WINS.');
       geofenceDetected = true;
     }
 
     // 3. CALENDAR (Explicit and Implicit)
     if (!geofenceDetected) {
-      if (_explicitCalendarRegex.hasMatch(lowerPrompt)) {
-        if (_calendarQueryVerbsRegex.hasMatch(lowerPrompt)) {
+      if (_explicitCalendarRegex.hasMatch(normalizedPrompt)) {
+        if (_calendarQueryVerbsRegex.hasMatch(normalizedPrompt)) {
           debugPrint(
-            '🧠 [IntentInterceptor] Explicit Calendar (Query) match detected.',
+            '[IntentInterceptor] Explicit Calendar (Query) match detected.',
           );
           hints.add(
             'GENERAL CHAT. Check schedule context but DO NOT use tools.',
           );
-        } else if (_calendarActionVerbsRegex.hasMatch(lowerPrompt) ||
-            _actionVerbsRegex.hasMatch(lowerPrompt)) {
+        } else if (_calendarActionVerbsRegex.hasMatch(normalizedPrompt) ||
+            _actionVerbsRegex.hasMatch(normalizedPrompt)) {
           debugPrint(
-            '🧠 [IntentInterceptor] Explicit Calendar (Action) match detected.',
+            '[IntentInterceptor] Explicit Calendar (Action) match detected.',
           );
           hints.add('USE manage_calendar');
         } else {
           debugPrint(
-            '🧠 [IntentInterceptor] Explicit Calendar (No Action) match detected.',
+            '[IntentInterceptor] Explicit Calendar (No Action) match detected.',
           );
           hints.add(
             'GENERAL CHAT. Check schedule context but DO NOT use tools.',
           );
         }
-      } else if (_timeMarkersRegex.hasMatch(lowerPrompt) &&
-          (_calendarActionVerbsRegex.hasMatch(lowerPrompt) ||
-              _actionVerbsRegex.hasMatch(lowerPrompt))) {
-        debugPrint('🧠 [IntentInterceptor] Implicit Calendar match detected.');
+      } else if (_timeMarkersRegex.hasMatch(normalizedPrompt) &&
+          (_calendarActionVerbsRegex.hasMatch(normalizedPrompt) ||
+              _actionVerbsRegex.hasMatch(normalizedPrompt))) {
+        debugPrint('[IntentInterceptor] Implicit Calendar match detected.');
         hints.add('USE manage_calendar');
       }
     }
 
     // 4. VAULT SEARCH
-    if (_vaultRegex.hasMatch(lowerPrompt)) {
-      debugPrint('🧠 [IntentInterceptor] Vault match detected.');
+    if (_vaultRegex.hasMatch(normalizedPrompt)) {
+      debugPrint('[IntentInterceptor] Vault match detected.');
       hints.add('USE <CMD_SYS_VAULT_SRCH>');
     }
 
-    // 4. GENERAL CHAT (No hints)
+    // 5. GENERAL CHAT (No hints)
     if (hints.isEmpty) {
       return originalPrompt;
     }

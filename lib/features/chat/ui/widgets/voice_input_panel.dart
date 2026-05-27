@@ -4,7 +4,6 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:record/record.dart';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:aitana/core/theme/app_colors.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
@@ -47,11 +46,13 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
   final double _vadSpeechHysteresisDb = -28.0;
   final int _vadSilenceDurationMs = 2500;
   final int _vadInitialTimeoutMs = 7000;
+  final int _vadPreRollMs = 700;
   static const int _hardStopDurationS = 20;
 
   StreamSubscription<Amplitude>? _amplitudeSubscription;
   Timer? _silenceTimer;
   Timer? _hardStopTimer;
+  DateTime? _recordingStartedAt;
 
   @override
   void dispose() {
@@ -78,28 +79,6 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
 
   Future<void> _startRecording() async {
     if (await _audioRecorder.hasPermission()) {
-      setState(() {
-        _isRecording = true;
-        _hasSpoken = false;
-      });
-
-      HapticFeedback.vibrate();
-
-      final beepPlayer = AudioPlayer();
-      await beepPlayer.setAudioContext(
-        AudioContext(
-          android: AudioContextAndroid(
-            contentType: AndroidContentType.sonification,
-            usageType: AndroidUsageType.assistanceSonification,
-            audioFocus: AndroidAudioFocus.none,
-            isSpeakerphoneOn: false,
-          ),
-        ),
-      );
-      await beepPlayer.play(AssetSource('sounds/beep.wav'));
-
-      await Future.delayed(const Duration(milliseconds: 500));
-
       final dir = await getTemporaryDirectory();
       final filePath =
           '${dir.path}/aitana_audio_${DateTime.now().millisecondsSinceEpoch}.wav';
@@ -113,6 +92,29 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
         path: filePath,
       );
 
+      _recordingStartedAt = DateTime.now();
+
+      if (!mounted) {
+        final orphanedPath = await _audioRecorder.stop();
+        if (orphanedPath != null) {
+          try {
+            final orphanedFile = File(orphanedPath);
+            if (await orphanedFile.exists()) await orphanedFile.delete();
+          } catch (e) {
+            debugPrint('Could not delete orphaned temp audio: $e');
+          }
+        }
+        _recordingStartedAt = null;
+        return;
+      }
+
+      setState(() {
+        _isRecording = true;
+        _hasSpoken = false;
+      });
+
+      HapticFeedback.lightImpact();
+
       _hardStopTimer = Timer(const Duration(seconds: _hardStopDurationS), () {
         if (_isRecording && mounted) _stopRecording(cancelAndDiscard: true);
       });
@@ -120,6 +122,13 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
       _amplitudeSubscription = _audioRecorder
           .onAmplitudeChanged(const Duration(milliseconds: 100))
           .listen((Amplitude amplitude) {
+            final startedAt = _recordingStartedAt;
+            if (startedAt != null &&
+                DateTime.now().difference(startedAt).inMilliseconds <
+                    _vadPreRollMs) {
+              return;
+            }
+
             if (amplitude.current > _vadThreshold) {
               _silenceTimer?.cancel();
               _silenceTimer = null;
@@ -162,6 +171,7 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
     _hardStopTimer = null;
     _silenceTimer?.cancel();
     _silenceTimer = null;
+    _recordingStartedAt = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
 

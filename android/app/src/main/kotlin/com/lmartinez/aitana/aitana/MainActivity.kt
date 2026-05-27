@@ -131,6 +131,7 @@ class MainActivity : FlutterFragmentActivity() {
     private var activeInferenceJob: kotlinx.coroutines.Job? = null
     private var activeConversationSystemPromptDigest: String? = null
     private var activeConversationBaseName: String? = null
+    private var activeConversationNativeToolsEnabled: Boolean? = null
     private enum class InferenceState { IDLE, RUNNING, CANCELLING }
 
     @Volatile
@@ -151,6 +152,9 @@ class MainActivity : FlutterFragmentActivity() {
      */
     @Volatile
     private var activeModelBaseName: String? = "gemma_4b"
+
+    @Volatile
+    private var pendingNativeToolsEnabled: Boolean = true
 
     /** Hoisted MethodChannel for the AI-Core channel; assigned in configureFlutterEngine. */
     private var aiCoreMethodChannel: MethodChannel? = null
@@ -389,20 +393,15 @@ class MainActivity : FlutterFragmentActivity() {
         
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        // Keep screen flags
+        // Keep screen on, allow showing over the lock screen
         setShowWhenLocked(true)
         setTurnScreenOn(true)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
-        // RE-ENABLED: Check if we are coming from the Nexus notification
-        // Using the safe call operator ?. to prevent NPE
+        // Check if this cold-start was triggered by the Nexus wake dispatcher
         isWokenByNexus = intent?.getStringExtra("WAKE_SOURCE") == "nexus_dispatcher"
-        
         if (isWokenByNexus) {
-            // Attempt to cancel the notification safely
-            try {
-                cancelWakeNotification()
-            } catch (e: Exception) {
+            try { cancelWakeNotification() } catch (e: Exception) {
                 Log.e("MainActivity", "Failed to cancel wake notification: ${e.message}")
             }
         }
@@ -410,23 +409,55 @@ class MainActivity : FlutterFragmentActivity() {
 
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent)
+
+        // ── Re-entrancy guard ─────────────────────────────────────────────────
+        // The foreground-promotion startActivity() below causes Android to call
+        // onNewIntent() a second time with our self-generated intent. That call
+        // must be discarded immediately so we do not enter an infinite loop and
+        // so that isWokenByNexus (set to true by the first call) is preserved
+        // for the subsequent Flutter checkWakeSource() invocation.
+        if (intent.getBooleanExtra("AITANA_SELF_PROMOTE", false)) return
+
         setIntent(intent)
         isWokenByNexus = intent.getStringExtra("WAKE_SOURCE") == "nexus_dispatcher"
 
         if (isWokenByNexus) {
-            // BUG-1 FIX (receive side) — Re-apply window visibility flags.
-            //
-            // setShowWhenLocked() and setTurnScreenOn() are applied in onCreate(),
-            // but when the Activity is already alive and brought to the foreground
-            // via onNewIntent() (SINGLE_TOP / REORDER_TO_FRONT), those flags are
-            // NOT automatically re-evaluated by the WindowManager.
-            //
-            // Re-applying them here ensures the window is correctly elevated over
-            // the Keyguard on every Nexus-triggered resume, not just on cold-starts.
+            // ── Window visibility flags ───────────────────────────────────────
+            // Re-applied here because setShowWhenLocked / setTurnScreenOn are
+            // evaluated by the WindowManager only when the window is being
+            // composed. If they were applied only in onCreate they would not
+            // take effect on subsequent Nexus wake events.
             setShowWhenLocked(true)
             setTurnScreenOn(true)
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-            Log.i("MainActivity", "onNewIntent: Nexus wake received — window flags re-applied.")
+
+            // ── Foreground promotion ──────────────────────────────────────────
+            // The three window flags above are NO-OPS when the Activity window
+            // is not composited (i.e., when the app is backgrounded). They only
+            // have effect once the Activity is already visible.
+            //
+            // To actually bring the task to the foreground we must call
+            // startActivity() on ourselves.  FLAG_ACTIVITY_REORDER_TO_FRONT
+            // moves the existing singleTop task to the top of the stack without
+            // creating a new Activity instance.
+            //
+            // NOTE: moveTaskToFront() is NOT used here — it requires the
+            // REORDER_TASKS system permission which is unavailable to third-party
+            // apps on API 29+.
+            val bringToFront = Intent(this, MainActivity::class.java).apply {
+                putExtra("AITANA_SELF_PROMOTE", true)
+                addFlags(
+                    Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(bringToFront)
+
+            Log.i(
+                "MainActivity",
+                "onNewIntent: Nexus wake received — window flags set, " +
+                "foreground promotion dispatched via FLAG_ACTIVITY_REORDER_TO_FRONT."
+            )
             cancelWakeNotification()
         }
     }
@@ -471,6 +502,7 @@ class MainActivity : FlutterFragmentActivity() {
         conversation = null
         activeConversationSystemPromptDigest = null
         activeConversationBaseName = null
+        activeConversationNativeToolsEnabled = null
         try {
             engine?.close()
         } catch (_: Exception) { /* already closed via disposeModel */ }
@@ -879,6 +911,9 @@ class MainActivity : FlutterFragmentActivity() {
                                 "initModel requires a 'modelName' argument.",
                                 null
                             )
+                        val enableNativeTools =
+                            call.argument<Boolean>("enableNativeTools") ?: true
+                        pendingNativeToolsEnabled = enableNativeTools
 
                         lifecycleScope.launch(Dispatchers.IO) {
                             // [2] Short-circuit: requested model is already loaded.
@@ -920,6 +955,7 @@ class MainActivity : FlutterFragmentActivity() {
                                                 conversation?.close(); conversation = null
                                                 activeConversationSystemPromptDigest = null
                                                 activeConversationBaseName = null
+                                                activeConversationNativeToolsEnabled = null
                                                 engine?.close();       engine = null
                                                 activeModelBaseName = null
                                                 Log.i(
@@ -1021,12 +1057,16 @@ class MainActivity : FlutterFragmentActivity() {
 
                     // ── Conversation reset (triggered by param changes or clear) ──
                     "resetConversation" -> {
+                        pendingNativeToolsEnabled =
+                            call.argument<Boolean>("enableNativeTools")
+                                ?: pendingNativeToolsEnabled
                         lifecycleScope.launch(Dispatchers.IO) {
                             conversationMutex.withLock {
                                 conversation?.close()
                                 conversation = null
                                 activeConversationSystemPromptDigest = null
                                 activeConversationBaseName = null
+                                activeConversationNativeToolsEnabled = null
                                 Log.i("LiteRT-LM", "Conversation reset ✓")
                             }
                             withContext(Dispatchers.Main) { result.success("conversation_reset") }
@@ -1046,6 +1086,7 @@ class MainActivity : FlutterFragmentActivity() {
                                                 conversation = null
                                                 activeConversationSystemPromptDigest = null
                                                 activeConversationBaseName = null
+                                                activeConversationNativeToolsEnabled = null
                                                 engine?.close()
                                                 engine = null
                                                 activeModelBaseName = null
@@ -1218,7 +1259,17 @@ class MainActivity : FlutterFragmentActivity() {
                 isInferenceRunning.set(true)
                 setInferenceState(InferenceState.RUNNING, "sendMessage")
                 try {
-                    val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
+                    val enableNativeTools =
+                        call.argument<Boolean>("enableNativeTools")
+                            ?: pendingNativeToolsEnabled
+                    pendingNativeToolsEnabled = enableNativeTools
+
+                    val conv = getOrInitConversation(
+                        systemPrompt,
+                        sampler,
+                        currentBaseName,
+                        enableNativeTools
+                    )
 
                     conv.sendMessageAsync(prompt)
                         .catch { e ->
@@ -1405,7 +1456,17 @@ class MainActivity : FlutterFragmentActivity() {
                 isInferenceRunning.set(true)
                 setInferenceState(InferenceState.RUNNING, "sendMessageWithImage")
                 try {
-                    val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
+                    val enableNativeTools =
+                        call.argument<Boolean>("enableNativeTools")
+                            ?: pendingNativeToolsEnabled
+                    pendingNativeToolsEnabled = enableNativeTools
+
+                    val conv = getOrInitConversation(
+                        systemPrompt,
+                        sampler,
+                        currentBaseName,
+                        enableNativeTools
+                    )
 
                     val contents = Contents.of(
                         Content.ImageFile(imagePath),
@@ -1495,7 +1556,17 @@ class MainActivity : FlutterFragmentActivity() {
                 isInferenceRunning.set(true)
                 setInferenceState(InferenceState.RUNNING, "sendMessageWithAudio")
                 try {
-                    val conv = getOrInitConversation(systemPrompt, sampler, currentBaseName)
+                    val enableNativeTools =
+                        call.argument<Boolean>("enableNativeTools")
+                            ?: pendingNativeToolsEnabled
+                    pendingNativeToolsEnabled = enableNativeTools
+
+                    val conv = getOrInitConversation(
+                        systemPrompt,
+                        sampler,
+                        currentBaseName,
+                        enableNativeTools
+                    )
 
                     val contents = Contents.of(
                         Content.AudioFile(audioPath),
@@ -1922,6 +1993,7 @@ class MainActivity : FlutterFragmentActivity() {
         conversation = null
         activeConversationSystemPromptDigest = null
         activeConversationBaseName = null
+        activeConversationNativeToolsEnabled = null
 
         try {
             engine?.close()
@@ -1975,18 +2047,21 @@ class MainActivity : FlutterFragmentActivity() {
     private suspend fun getOrInitConversation(
         systemInstructionText: String,
         samplerConfig: SamplerConfig,
-        baseName: String
+        baseName: String,
+        enableNativeTools: Boolean
     ): Conversation {
         conversationMutex.withLock {
             val incomingDigest = sha256Digest(systemInstructionText)
             conversation?.let { existing ->
                 val promptChanged = activeConversationSystemPromptDigest != incomingDigest
                 val modelChanged = activeConversationBaseName != baseName
+                val toolModeChanged =
+                    activeConversationNativeToolsEnabled != enableNativeTools
 
-                if (!promptChanged && !modelChanged) {
+                if (!promptChanged && !modelChanged && !toolModeChanged) {
                     Log.i(
                         "LiteRT-LM",
-                        "Conversation reuse -> promptDigest=${incomingDigest.take(12)}, model=$baseName"
+                        "Conversation reuse -> promptDigest=${incomingDigest.take(12)}, model=$baseName, nativeTools=$enableNativeTools"
                     )
                     return existing
                 }
@@ -1995,8 +2070,10 @@ class MainActivity : FlutterFragmentActivity() {
                     "LiteRT-LM",
                     "Conversation refresh -> promptChanged=$promptChanged, " +
                             "modelChanged=$modelChanged, " +
+                            "toolModeChanged=$toolModeChanged, " +
                             "oldPrompt=${activeConversationSystemPromptDigest?.take(12)}, " +
-                            "newPrompt=${incomingDigest.take(12)}, model=$baseName"
+                            "newPrompt=${incomingDigest.take(12)}, model=$baseName, " +
+                            "nativeTools=$enableNativeTools"
                 )
                 try {
                     existing.close()
@@ -2006,17 +2083,23 @@ class MainActivity : FlutterFragmentActivity() {
                 conversation = null
                 activeConversationSystemPromptDigest = null
                 activeConversationBaseName = null
+                activeConversationNativeToolsEnabled = null
             }
 
             val currentEngine = getOrInitEngine(baseName)
 
-            val methodChannel = aiCoreMethodChannel
-                ?: error("aiCoreMethodChannel not initialized")
+            val conversationTools = if (enableNativeTools) {
+                val methodChannel = aiCoreMethodChannel
+                    ?: error("aiCoreMethodChannel not initialized")
+                listOf(tool(CalendarControls(methodChannel)))
+            } else {
+                emptyList()
+            }
 
             val config = ConversationConfig(
                 systemInstruction = Contents.of(systemInstructionText),
                 samplerConfig     = samplerConfig,
-                tools             = listOf(tool(CalendarControls(methodChannel)))
+                tools             = conversationTools
             )
 
             Log.i(
@@ -2029,13 +2112,15 @@ class MainActivity : FlutterFragmentActivity() {
 
             Log.i(
                 "LiteRT-LM",
-                "New Conversation context -> promptDigest=${incomingDigest.take(12)}, model=$baseName"
+                "New Conversation context -> promptDigest=${incomingDigest.take(12)}, " +
+                        "model=$baseName, nativeTools=$enableNativeTools"
             )
 
             return currentEngine.createConversation(config).also {
                 conversation = it
                 activeConversationSystemPromptDigest = incomingDigest
                 activeConversationBaseName = baseName
+                activeConversationNativeToolsEnabled = enableNativeTools
             }
         }
     }

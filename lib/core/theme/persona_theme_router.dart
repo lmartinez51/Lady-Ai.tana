@@ -5,7 +5,7 @@ class PersonaThemeRouter {
   static const Color aiColor = Color(0xFF00F0FF);
   static const Color legalColor = Color(0xFFFFD700);
 
-  /// Returns the target model base name for the given persona category.
+  /// Returns the target model base name. Only HUMAN uses the variant model.
   static String getModelBaseName(String category) {
     final cat = category.toUpperCase();
     if (cat == 'HUMAN') {

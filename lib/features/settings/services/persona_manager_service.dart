@@ -135,7 +135,7 @@ class PersonaManagerService {
               "- Output rule: Clean natural prose only. "
               "Never print code syntax, backticks, or tool strings in your reply.",
           defaultLang: "ES",
-          isActive: true,
+          isActive: false,
         ),
         PersonaRecord(
           name: "Counselor Aitana",
@@ -197,7 +197,45 @@ class PersonaManagerService {
         ),
       ]);
     }
+    _enforceSingleActivePersona();
     activeCategoryNotifier.value = getActivePersona().category;
+  }
+
+  void _enforceSingleActivePersona() {
+    final personas = _box.getAll();
+    if (personas.isEmpty) return;
+
+    final activePersonas = personas
+        .where((persona) => persona.isActive)
+        .toList();
+    if (activePersonas.length == 1) return;
+
+    final survivor = _findAiPersona(personas) ?? personas.first;
+    var changed = false;
+
+    for (final persona in personas) {
+      final shouldBeActive = persona.id == survivor.id;
+      if (persona.isActive != shouldBeActive) {
+        persona.isActive = shouldBeActive;
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      _box.putMany(personas);
+      debugPrint(
+        '[PersonaManager] Repaired active persona invariant -> ${survivor.category}',
+      );
+    }
+  }
+
+  PersonaRecord? _findAiPersona(List<PersonaRecord> personas) {
+    for (final persona in personas) {
+      if (persona.category.toUpperCase() == 'AI') {
+        return persona;
+      }
+    }
+    return null;
   }
 
   PersonaRecord getActivePersona() {
@@ -233,6 +271,7 @@ class PersonaManagerService {
       persona.isActive = (persona.id == id);
     }
     _box.putMany(allPersonas);
+    _enforceSingleActivePersona();
     activeCategoryNotifier.value = getActivePersona().category;
   }
 }

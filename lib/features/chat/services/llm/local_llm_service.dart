@@ -38,6 +38,7 @@ class LocalLlmService {
     'ES',
   );
   static bool _isInitialized = false;
+  static bool isWokenByVoiceOnStartup = false;
 
   /// In-flight initialization guard.
   ///
@@ -249,6 +250,24 @@ class LocalLlmService {
     return interceptedPrompt.substring(hint.length).trimLeft();
   }
 
+  static bool _toolFeaturesEnabledForCategory(String category) {
+    final normalizedCategory = category.toUpperCase();
+    return normalizedCategory == 'AI' || normalizedCategory == 'LEGAL';
+  }
+
+  static bool _nativeToolsEnabledForActivePersona() {
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    return _toolFeaturesEnabledForCategory(activePersona.category);
+  }
+
+  static String _overrideTurnEnvelopeAuth(String turnPrompt, String auth) {
+    return turnPrompt.replaceFirstMapped(
+      RegExp(r'^\[SYS: ([^\]]*?)Auth: [^\]|\r\n]+'),
+      (match) => '[SYS: ${match.group(1)}Auth: $auth',
+    );
+  }
+
   /// Encapsulates the state-clearing logic previously used in the UI.
   /// Clears the LLM context, clears the active session summary, and
   /// executes the provided callback to clear UI messages and session IDs.
@@ -389,8 +408,10 @@ class LocalLlmService {
     try {
       status.value = 'loading';
       debugPrint('🔄 [LocalLlmService] Inicializando LiteRT-LM...');
+      final enableNativeTools = _nativeToolsEnabledForActivePersona();
       final String result = await _channel.invokeMethod('initModel', {
         'modelName': currentModel.value.baseName,
+        'enableNativeTools': enableNativeTools,
       });
 
       if (result == 'model_ready') {
@@ -436,8 +457,10 @@ class LocalLlmService {
     );
 
     try {
+      final enableNativeTools = _nativeToolsEnabledForActivePersona();
       final String? result = await _channel.invokeMethod('initModel', {
         'modelName': targetModel.baseName,
+        'enableNativeTools': enableNativeTools,
       });
 
       if (result == 'success' || result == 'model_ready') {
@@ -472,8 +495,7 @@ class LocalLlmService {
 
   /// Routes to the correct AI model based on the newly activated persona category.
   ///
-  /// - `'LEGAL'` → `gemma_4b_variant` (Uncensored, higher factual fidelity).
-  /// - `'AI'` / `'HUMAN'` → `gemma_4b` (Standard, conversational default).
+  /// Effective route: HUMAN uses `gemma_4b_variant`; AI and LEGAL use `gemma_4b`.
   ///
   /// Returns [ModelSwitchResult.alreadyActive] if the required model is already
   /// loaded, avoiding an unnecessary native reload cycle.
@@ -514,7 +536,9 @@ class LocalLlmService {
     debugPrint('⚙️ [LocalLlmService] Params updated → $_currentParams');
     // Invalidate the native Conversation. The next sendMessage call will
     // lazily re-create it with the new SamplerConfig baked in.
-    await _channel.invokeMethod('resetConversation');
+    await _channel.invokeMethod('resetConversation', {
+      'enableNativeTools': _nativeToolsEnabledForActivePersona(),
+    });
     debugPrint('🔄 [LocalLlmService] Native conversation reset complete.');
   }
 
@@ -525,7 +549,9 @@ class LocalLlmService {
 
     activeSessionSummary = '';
 
-    await _channel.invokeMethod('resetConversation');
+    await _channel.invokeMethod('resetConversation', {
+      'enableNativeTools': _nativeToolsEnabledForActivePersona(),
+    });
 
     try {
       final tempDir = await getTemporaryDirectory();
@@ -877,6 +903,17 @@ class LocalLlmService {
       return 'Procesando...';
     }
 
+    final activePersona = ObjectBoxService.instance.personaManager
+        .getActivePersona();
+    final isAudioTurn = audioPath != null && audioPath.isNotEmpty;
+    final enableToolFeatures = _toolFeaturesEnabledForCategory(
+      activePersona.category,
+    );
+    final enableAudioOpticsAuth = isAudioTurn && enableToolFeatures;
+    final effectiveApplyIntentInterceptor =
+        applyIntentInterceptor && enableToolFeatures && !isAudioTurn;
+    final effectiveEnableToolParsing = enableToolParsing && enableToolFeatures;
+
     final activeParams = isStructuredOutput
         ? LlmInferenceParams(
             temperature: _currentParams.temperature,
@@ -913,7 +950,7 @@ class LocalLlmService {
       }
       debugPrint('⚙️ [LocalLlmService] Active params: $activeParams');
 
-      final interceptedPrompt = applyIntentInterceptor
+      final interceptedPrompt = effectiveApplyIntentInterceptor
           ? IntentInterceptor.processPrompt(prompt)
           : prompt;
 
@@ -921,12 +958,21 @@ class LocalLlmService {
       String? toolHint;
       final List<String> allowedTags = [];
 
-      // Vault Search is always allowed because the model can invoke it dynamically
-      if (enableToolParsing) {
+      if (enableAudioOpticsAuth) {
+        toolHint = 'AUDIO_OPTICS';
+        allowedTags.add('<CMD_SYS_OPTICS_1>');
+        allowedTags.add('<CMD_SYS_OPTICS_0>');
+      }
+
+      // Vault Search is always allowed for text/image because the model can
+      // invoke it dynamically. Audio gets optics-only auth in this phase.
+      if (effectiveEnableToolParsing && !enableAudioOpticsAuth) {
         allowedTags.add('<CMD_SYS_VAULT_SRCH:');
       }
 
-      if (enableToolParsing && interceptedPrompt.startsWith('[SYSTEM HINT:')) {
+      if (!enableAudioOpticsAuth &&
+          effectiveEnableToolParsing &&
+          interceptedPrompt.startsWith('[SYSTEM HINT:')) {
         final closingBracket = interceptedPrompt.indexOf(']');
         if (closingBracket != -1) {
           toolHint = interceptedPrompt.substring(0, closingBracket + 1);
@@ -954,7 +1000,7 @@ class LocalLlmService {
         toolHint,
       );
       debugPrint(
-        '🧭 [ToolPipeline] toolHint=${toolHint ?? 'none'} | allowedTags=${allowedTags.toSet().join(', ')}',
+        '🧭 [ToolPipeline] toolFeatures=$enableToolFeatures | toolHint=${toolHint ?? 'none'} | allowedTags=${allowedTags.toSet().join(', ')}',
       );
 
       final completer = Completer<String>();
@@ -1096,13 +1142,20 @@ class LocalLlmService {
         isStructuredOutput: isStructuredOutput,
       );
       final todayEvents = await CalendarService().getTodayEvents();
-      final nativeTurnPrompt = PromptManager.buildTurnContextEnvelope(
+      var nativeTurnPrompt = PromptManager.buildTurnContextEnvelope(
         visibleUserPrompt: visibleUserPrompt,
         now: DateTime.now(),
         todayEvents: todayEvents,
         armedToolHint: toolHint,
         retrievedLegalContext: retrievedLegalContext,
+        includeToolAuth: enableToolFeatures,
       );
+      if (enableAudioOpticsAuth) {
+        nativeTurnPrompt = _overrideTurnEnvelopeAuth(
+          nativeTurnPrompt,
+          'AUDIO_OPTICS',
+        );
+      }
       final systemPrompt = await _buildSystemPrompt(
         isStructuredOutput: isStructuredOutput,
       );
@@ -1112,16 +1165,20 @@ class LocalLlmService {
       debugPrint('==========================================');
       debugPrint(
         '[LocalLlmService] Native turn envelope chars=${nativeTurnPrompt.length} '
-        'auth=${toolHint == null ? 'NONE' : 'TOOL'}.',
+        'auth=${enableAudioOpticsAuth
+            ? 'AUDIO_OPTICS'
+            : toolHint == null
+            ? 'NONE'
+            : 'TOOL'}.',
       );
 
       final Future<dynamic> invokeFuture;
       if (audioPath != null && audioPath.isNotEmpty) {
-        const audioDirective = PromptManager.audioDirective;
         invokeFuture = _channel.invokeMethod('sendMessageWithAudio', {
-          'prompt': audioDirective,
+          'prompt': '${PromptManager.audioDirective}\n\n$nativeTurnPrompt',
           'system_prompt': systemPrompt,
           'audioPath': audioPath,
+          'enableNativeTools': enableToolFeatures,
           ...activeParams.toMap(),
         });
       } else if (imagePath != null && imagePath.isNotEmpty) {
@@ -1130,12 +1187,14 @@ class LocalLlmService {
           'system_prompt': systemPrompt,
           'imagePath': imagePath,
           'isStructuredOutput': isStructuredOutput,
+          'enableNativeTools': enableToolFeatures,
           ...activeParams.toMap(),
         });
       } else {
         invokeFuture = _channel.invokeMethod('sendMessage', {
           'prompt': nativeTurnPrompt,
           'system_prompt': systemPrompt,
+          'enableNativeTools': enableToolFeatures,
           ...activeParams.toMap(),
         });
       }
@@ -1259,6 +1318,7 @@ class LocalLlmService {
         'temperature': 0.0,
         'top_k': 1,
         'top_p': 1.0,
+        'enableNativeTools': false,
       });
 
       await completer.future.timeout(
@@ -1292,7 +1352,9 @@ class LocalLlmService {
     await Future.delayed(const Duration(milliseconds: 100));
 
     // 1. Reseteamos la conversación para no contaminar el historial con este prompt
-    await _channel.invokeMethod('resetConversation');
+    await _channel.invokeMethod('resetConversation', {
+      'enableNativeTools': false,
+    });
 
     final prompt =
         "Analyze this conversation. First, write a single line with a short TITLE (3 to 5 words) describing the topic. Then, write a summary in a maximum of 3 bullet points. Use STRICTLY this format:\nTITLE: [Your title here]\n- [Bullet 1]\n- [Bullet 2]\n\nConversation:\n$rawConversation";
@@ -1328,6 +1390,7 @@ class LocalLlmService {
         // Forzamos que no use el thinking mode para el resumen (ahorra batería y tiempo)
         'temperature': 0.1,
         'top_k': 10,
+        'enableNativeTools': false,
       });
 
       final finalSummary = await completer.future.timeout(
@@ -1342,7 +1405,9 @@ class LocalLlmService {
     } finally {
       await ghostSub.cancel();
       // 3. Reseteamos de nuevo para dejar el motor limpio para el siguiente chat
-      await _channel.invokeMethod('resetConversation');
+      await _channel.invokeMethod('resetConversation', {
+        'enableNativeTools': false,
+      });
       debugPrint(
         '👻 [LocalLlmService] Ghost Summary completado y contexto purgado.',
       );
