@@ -113,9 +113,14 @@ sources conflict: Ley/Codigo, then Jurisprudencia, then Doctrina.
         isEnglish ? activePersona.promptEn : activePersona.promptEs,
       );
 
-      final relationship = activePersona.category == 'AI'
-          ? 'boss and creator'
-          : 'boss';
+      String relationship;
+      if (personaCategory == 'HUMAN') {
+        relationship = 'best friend and equal';
+      } else if (personaCategory == 'AI') {
+        relationship = 'boss and creator';
+      } else {
+        relationship = 'boss'; // Para LEGAL u otras futuras
+      }
       basePrompt +=
           """
 

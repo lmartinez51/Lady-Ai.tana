@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 
 class PersonaThemeRouter {
   static const Color humanColor = Color(0xFF00FF41);
-  static const Color aiColor = Color(0xFF00F0FF);
+  //static const Color aiColor = Color(0xFF00F0FF);
+  static const Color aiColor = Color(0xFFFFFFFF);
   static const Color legalColor = Color(0xFFFFD700);
 
   /// Returns the target model base name. Only HUMAN uses the variant model.
