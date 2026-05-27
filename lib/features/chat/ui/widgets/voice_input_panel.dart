@@ -5,7 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:aitana/core/constants/native_channels.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/features/chat/services/audio/wav_start_trimmer.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 
 class VoiceInputPanel extends StatefulWidget {
@@ -37,6 +39,10 @@ class VoiceInputPanel extends StatefulWidget {
 }
 
 class VoiceInputPanelState extends State<VoiceInputPanel> {
+  static const MethodChannel _aiCoreChannel = MethodChannel(
+    NativeChannels.aiCore,
+  );
+
   final AudioRecorder _audioRecorder = AudioRecorder();
   bool _isRecording = false;
   bool _hasSpoken = false;
@@ -46,13 +52,15 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
   final double _vadSpeechHysteresisDb = -28.0;
   final int _vadSilenceDurationMs = 2500;
   final int _vadInitialTimeoutMs = 7000;
-  final int _vadPreRollMs = 700;
+  final int _earconPlaybackMs = 100;
+  final int _earconTailMs = 260;
   static const int _hardStopDurationS = 20;
 
   StreamSubscription<Amplitude>? _amplitudeSubscription;
   Timer? _silenceTimer;
   Timer? _hardStopTimer;
   DateTime? _recordingStartedAt;
+  DateTime? _speechGateOpensAt;
 
   @override
   void dispose() {
@@ -93,6 +101,9 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
       );
 
       _recordingStartedAt = DateTime.now();
+      _speechGateOpensAt = _recordingStartedAt!.add(
+        Duration(milliseconds: _earconPlaybackMs + _earconTailMs),
+      );
 
       if (!mounted) {
         final orphanedPath = await _audioRecorder.stop();
@@ -105,6 +116,7 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
           }
         }
         _recordingStartedAt = null;
+        _speechGateOpensAt = null;
         return;
       }
 
@@ -114,6 +126,7 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
       });
 
       HapticFeedback.lightImpact();
+      unawaited(_playReadinessEarcon());
 
       _hardStopTimer = Timer(const Duration(seconds: _hardStopDurationS), () {
         if (_isRecording && mounted) _stopRecording(cancelAndDiscard: true);
@@ -122,10 +135,9 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
       _amplitudeSubscription = _audioRecorder
           .onAmplitudeChanged(const Duration(milliseconds: 100))
           .listen((Amplitude amplitude) {
-            final startedAt = _recordingStartedAt;
-            if (startedAt != null &&
-                DateTime.now().difference(startedAt).inMilliseconds <
-                    _vadPreRollMs) {
+            final speechGateOpensAt = _speechGateOpensAt;
+            if (speechGateOpensAt != null &&
+                DateTime.now().isBefore(speechGateOpensAt)) {
               return;
             }
 
@@ -166,12 +178,28 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
     }
   }
 
+  Future<void> _playReadinessEarcon() async {
+    try {
+      final played = await _aiCoreChannel.invokeMethod<bool>(
+        'playReadinessEarcon',
+        {'durationMs': _earconPlaybackMs},
+      );
+      if (played != true) {
+        debugPrint('Native readiness earcon did not start.');
+      }
+    } catch (e) {
+      debugPrint('Could not play readiness earcon: $e');
+    }
+  }
+
   Future<void> _stopRecording({bool cancelAndDiscard = false}) async {
+    final trimDuration = _calculateEarconTrimDuration();
     _hardStopTimer?.cancel();
     _hardStopTimer = null;
     _silenceTimer?.cancel();
     _silenceTimer = null;
     _recordingStartedAt = null;
+    _speechGateOpensAt = null;
     await _amplitudeSubscription?.cancel();
     _amplitudeSubscription = null;
 
@@ -187,8 +215,43 @@ class VoiceInputPanelState extends State<VoiceInputPanel> {
         if (mounted) setState(() => _isRecording = false);
       } else {
         if (mounted) setState(() => _isRecording = false);
-        widget.onAudioRecorded(path);
+        final trimmedPath = await _trimEarconFromRecording(path, trimDuration);
+        widget.onAudioRecorded(trimmedPath);
       }
+    }
+  }
+
+  Duration _calculateEarconTrimDuration() {
+    final startedAt = _recordingStartedAt;
+    final speechGateOpensAt = _speechGateOpensAt;
+    if (startedAt == null || speechGateOpensAt == null) {
+      return Duration.zero;
+    }
+    final trimDuration = speechGateOpensAt.difference(startedAt);
+    return trimDuration.isNegative ? Duration.zero : trimDuration;
+  }
+
+  Future<String> _trimEarconFromRecording(
+    String path,
+    Duration trimDuration,
+  ) async {
+    if (trimDuration <= Duration.zero) return path;
+
+    try {
+      final trimmedPath = await WavStartTrimmer.trimStart(
+        inputPath: path,
+        trimDuration: trimDuration,
+      );
+      if (trimmedPath != path) {
+        final originalFile = File(path);
+        if (await originalFile.exists()) {
+          await originalFile.delete();
+        }
+      }
+      return trimmedPath;
+    } catch (e) {
+      debugPrint('Could not trim readiness earcon from WAV: $e');
+      return path;
     }
   }
 

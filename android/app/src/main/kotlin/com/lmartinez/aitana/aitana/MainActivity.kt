@@ -8,6 +8,8 @@ import android.content.pm.PackageManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.media.AudioManager
+import android.media.ToneGenerator
 import java.security.MessageDigest
 import java.util.Locale
 import android.util.Log
@@ -897,6 +899,23 @@ class MainActivity : FlutterFragmentActivity() {
         editor.apply()
     }
 
+    private fun playReadinessEarcon(durationMs: Int): Boolean {
+        return try {
+            val safeDurationMs = durationMs.coerceIn(50, 300)
+            val toneGenerator = ToneGenerator(AudioManager.STREAM_MUSIC, 85)
+            val started = toneGenerator.startTone(ToneGenerator.TONE_PROP_BEEP, safeDurationMs)
+            Handler(Looper.getMainLooper()).postDelayed({
+                try {
+                    toneGenerator.release()
+                } catch (_: Exception) {}
+            }, (safeDurationMs + 50).toLong())
+            started
+        } catch (e: Exception) {
+            Log.e("MainActivity", "Failed to play readiness earcon: ${e.message}")
+            false
+        }
+    }
+
     private fun setupAiCoreChannel(flutterEngine: FlutterEngine) {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, AICORE_CHANNEL)
             .setMethodCallHandler { call, result ->
@@ -1038,6 +1057,12 @@ class MainActivity : FlutterFragmentActivity() {
                         } else {
                             result.error("NOT_RECORDING", "No active recording.", null)
                         }
+                    }
+
+                    // Native UI sonification
+                    "playReadinessEarcon" -> {
+                        val durationMs = call.argument<Int>("durationMs") ?: 100
+                        result.success(playReadinessEarcon(durationMs))
                     }
 
                     // ── Text-only inference ───────────────────────────────────

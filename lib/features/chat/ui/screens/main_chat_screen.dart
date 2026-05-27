@@ -121,6 +121,11 @@ class _MainChatScreenState extends State<MainChatScreen>
   /// is dispatched only into a live, ready engine.
   bool _pendingNexusGreeting = false;
 
+  /// Serializes persona runtime sync so notifier-driven switches and Nexus
+  /// same-persona wake fallbacks cannot race model hot-swaps.
+  bool _isPersonaRuntimeSyncInProgress = false;
+  bool _shouldRerunPersonaRuntimeSync = false;
+
   // --- ESTADO DINÁMICO (PREPARACIÓN FASE 5) ---
   // Model state is now managed by LocalLlmService.currentModel
 
@@ -238,10 +243,48 @@ class _MainChatScreenState extends State<MainChatScreen>
     });
   }
 
-  void _onPersonaCategoryChanged() async {
+  void _onPersonaCategoryChanged() {
+    unawaited(
+      _syncPersonaRuntimeAndMaybeGreet(source: 'activeCategoryNotifier'),
+    );
+  }
+
+  Future<void> _syncPersonaRuntimeAndMaybeGreet({
+    required String source,
+  }) async {
+    if (_isPersonaRuntimeSyncInProgress) {
+      _shouldRerunPersonaRuntimeSync = true;
+      debugPrint(
+        '🟡 [PersonaSync] Sync already in progress; queued rerun from $source.',
+      );
+      return;
+    }
+
+    _isPersonaRuntimeSyncInProgress = true;
+    var currentSource = source;
+
+    try {
+      while (mounted) {
+        _shouldRerunPersonaRuntimeSync = false;
+        await _runPersonaRuntimeSyncOnce(source: currentSource);
+
+        if (!_shouldRerunPersonaRuntimeSync) break;
+        currentSource = 'queued-rerun';
+      }
+    } finally {
+      _isPersonaRuntimeSyncInProgress = false;
+    }
+  }
+
+  Future<void> _runPersonaRuntimeSyncOnce({required String source}) async {
     final personaManager = ObjectBoxService.instance.personaManager;
     final activePersona = personaManager.getActivePersona();
     final category = activePersona.category;
+
+    debugPrint(
+      '🎛️ [PersonaSync] source=$source category=$category '
+      'pendingNexusGreeting=$_pendingNexusGreeting',
+    );
 
     // ── Step 1: Unconditionally synchronize language and engine ──────────────
     //
@@ -305,6 +348,7 @@ class _MainChatScreenState extends State<MainChatScreen>
     // DB write somehow landed on a non-AI persona, we never send the greeting.
     if (_pendingNexusGreeting && category == 'AI' && mounted) {
       _pendingNexusGreeting = false;
+      debugPrint('🎙️ [PersonaSync] Nexus greeting dispatched via $source.');
       debugPrint(
         '🎙️ [PersonaChanged] Nexus greeting dispatched — '
         'engine confirmed ready for AI persona.',
@@ -347,6 +391,7 @@ class _MainChatScreenState extends State<MainChatScreen>
 
       _hasFiredAutoGreeting = true;
       _isVoiceWakeSession = true;
+      debugPrint('🎙️ [NexusWake] Wake flag consumed on resume.');
 
       // Signal the reactive listener to dispatch the greeting once the
       // engine swap is confirmed. This must be set BEFORE setActivePersona()
@@ -357,13 +402,25 @@ class _MainChatScreenState extends State<MainChatScreen>
       // activeCategoryNotifier, which triggers _onPersonaCategoryChanged.
       // That listener is now the sole owner of all subsequent engine work.
       final personaManager = ObjectBoxService.instance.personaManager;
+      final wasAlreadyAi = personaManager.getActivePersona().category == 'AI';
       final aiPersona = personaManager.getAllPersonas().firstWhere(
         (p) => p.category == 'AI',
       );
+      debugPrint(
+        '🎙️ [NexusWake] Forcing AI persona; wasAlreadyAi=$wasAlreadyAi.',
+      );
       personaManager.setActivePersona(aiPersona.id);
 
-      // ← Method exits here. No engine calls. No awaits on engine state.
-      // _onPersonaCategoryChanged handles everything from this point forward.
+      if (wasAlreadyAi) {
+        debugPrint(
+          '🎙️ [NexusWake] AI already active; using same-category fallback path.',
+        );
+        await _syncPersonaRuntimeAndMaybeGreet(source: 'nexus-same-ai');
+      } else {
+        debugPrint(
+          '🎙️ [NexusWake] Persona changed to AI; notifier path will dispatch.',
+        );
+      }
     } catch (e) {
       // On any failure, clear the flag so a stale greeting is not dispatched
       // on the next unrelated persona switch.
