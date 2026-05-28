@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 import 'package:aitana/features/chat/domain/entities/chat_message.dart';
 import 'package:aitana/features/chat/ui/widgets/audio_bubble.dart';
 
@@ -14,31 +15,21 @@ const Color _kAitanaTextHigh = Color(0xFFEAFBFF);
 class ChatBubbleWidget extends StatelessWidget {
   final ChatMessage message;
   final Color userBubbleColor;
+  final double? snackBarBottomMargin;
 
   const ChatBubbleWidget({
     super.key,
     required this.message,
     required this.userBubbleColor,
+    this.snackBarBottomMargin,
   });
 
   void _copyToClipboard(String text, BuildContext context) {
     Clipboard.setData(ClipboardData(text: text));
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: const Row(
-          children: [
-            Icon(Icons.check_circle, color: Colors.white, size: 20),
-            SizedBox(width: 8),
-            Text(
-              "Copied to clipboard",
-              style: TextStyle(fontFamily: 'Outfit', color: Colors.white),
-            ),
-          ],
-        ),
-        backgroundColor: AppColors.cyberBlue,
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ),
+    AppSnackBars.showSuccess(
+      context,
+      'Copied to clipboard',
+      bottomMargin: snackBarBottomMargin,
     );
   }
 

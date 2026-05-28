@@ -14,6 +14,7 @@ import 'package:flutter_spinkit/flutter_spinkit.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/core/services/network/network_service.dart';
 import 'package:aitana/core/services/device/device_event_service.dart';
@@ -52,6 +53,7 @@ class _MainChatScreenState extends State<MainChatScreen>
   static const double _chatHeaderBodyHeight = 60.0;
   static const double _inputFooterMinHeight = 76.0;
   static const double _inputFooterMaxHeight = 244.0;
+  static const double _snackBarFooterGap = 12.0;
   static const Color _userBubbleColor = _kLorenzoBubbleColor;
 
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
@@ -327,15 +329,11 @@ class _MainChatScreenState extends State<MainChatScreen>
       );
 
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: const Text(
-              'Context purged for persona shift.',
-              style: TextStyle(fontFamily: 'Outfit', color: Colors.black87),
-            ),
-            backgroundColor: PersonaThemeRouter.getThemeColor(category),
-            duration: const Duration(seconds: 2),
-          ),
+        AppSnackBars.showInfo(
+          context,
+          'Context purged for persona shift.',
+          bottomMargin: _chatSnackBarBottomMargin(context),
+          duration: const Duration(seconds: 2),
         );
       }
     }
@@ -440,11 +438,10 @@ class _MainChatScreenState extends State<MainChatScreen>
     if (!mounted) return;
 
     // 1. Show the save confirmation SnackBar.
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Video saved in Movies/Aitana-Videos'),
-        backgroundColor: Colors.green,
-      ),
+    AppSnackBars.showSuccess(
+      context,
+      'Video saved in Movies/Aitana-Videos',
+      bottomMargin: _chatSnackBarBottomMargin(context),
     );
     debugPrint(
       '🟢 [Flutter] Evento de paro manual recibido. Mostrando SnackBar...',
@@ -463,6 +460,12 @@ class _MainChatScreenState extends State<MainChatScreen>
     if (!_scrollController.hasClients) return true;
     final position = _scrollController.position;
     return position.pixels <= position.minScrollExtent + 96;
+  }
+
+  double _chatSnackBarBottomMargin(BuildContext context) {
+    return _inputFooterMinHeight +
+        MediaQuery.of(context).viewPadding.bottom +
+        _snackBarFooterGap;
   }
 
   void _scrollToBottom({bool force = false}) {
@@ -549,32 +552,28 @@ class _MainChatScreenState extends State<MainChatScreen>
         _needsSaving = false;
         _selectedImagePath = null;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Switched to ${targetModel.displayName}'),
-          backgroundColor: Colors.green,
-        ),
+      AppSnackBars.showSuccess(
+        context,
+        'Switched to ${targetModel.displayName}',
+        bottomMargin: _chatSnackBarBottomMargin(context),
       );
     } else if (result == ModelSwitchResult.busy) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Engine is busy. Please wait.'),
-          backgroundColor: Colors.orange,
-        ),
+      AppSnackBars.showWarning(
+        context,
+        'Engine is busy. Please wait.',
+        bottomMargin: _chatSnackBarBottomMargin(context),
       );
     } else if (result == ModelSwitchResult.notFound) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Model file not found on device.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBars.showError(
+        context,
+        'Model file not found on device.',
+        bottomMargin: _chatSnackBarBottomMargin(context),
       );
     } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Error switching model. Check logs.'),
-          backgroundColor: Colors.red,
-        ),
+      AppSnackBars.showError(
+        context,
+        'Error switching model. Check logs.',
+        bottomMargin: _chatSnackBarBottomMargin(context),
       );
     }
   }
@@ -1124,11 +1123,10 @@ class _MainChatScreenState extends State<MainChatScreen>
         await channel.invokeMethod('startVideoRecording');
         // State is now driven by DeviceEventService.isVideoRecording
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Recording... video floating preview active'),
-              backgroundColor: Colors.green,
-            ),
+          AppSnackBars.showSuccess(
+            context,
+            'Recording... video floating preview active',
+            bottomMargin: _chatSnackBarBottomMargin(context),
           );
         }
       } catch (e) {
@@ -1138,11 +1136,10 @@ class _MainChatScreenState extends State<MainChatScreen>
       try {
         await channel.invokeMethod('stopVideoRecording');
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Video saved to Gallery/Aitana-Videos'),
-              backgroundColor: Colors.green,
-            ),
+          AppSnackBars.showSuccess(
+            context,
+            'Video saved to Gallery/Aitana-Videos',
+            bottomMargin: _chatSnackBarBottomMargin(context),
           );
         }
       } catch (e) {
@@ -1560,6 +1557,7 @@ class _MainChatScreenState extends State<MainChatScreen>
               vaultStateListenable: _vaultContinuationState,
               firstTokenWaitListenable: _isWaitingForFirstToken,
               accentColor: PersonaThemeRouter.getThemeColor(category),
+              snackBarBottomMargin: _chatSnackBarBottomMargin(context),
             );
           },
         ),
@@ -2127,23 +2125,46 @@ class _MainChatScreenState extends State<MainChatScreen>
               ),
             ),
           ),
-          body: ValueListenableBuilder<bool>(
-            valueListenable: _tickerModeNotifier,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                // Header is painted in the root Stack foreground. This spacer
-                // preserves the same top layout budget for the lazy chat body.
-                SizedBox(
-                  height: mediaQuery.padding.top + _chatHeaderBodyHeight,
+          body: Stack(
+            children: [
+              ValueListenableBuilder<bool>(
+                valueListenable: _tickerModeNotifier,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Header is painted in the Scaffold body foreground. This
+                    // spacer preserves the same top layout budget for the lazy
+                    // chat body while allowing the Drawer to overlay the header.
+                    SizedBox(
+                      height: mediaQuery.padding.top + _chatHeaderBodyHeight,
+                    ),
+                    _buildMessageBody(),
+                    _buildStickyInputFooter(mediaQuery.viewPadding.bottom),
+                  ],
                 ),
-                _buildMessageBody(),
-                _buildStickyInputFooter(mediaQuery.viewPadding.bottom),
-              ],
-            ),
-            builder: (context, tickerModeEnabled, child) {
-              return TickerMode(enabled: tickerModeEnabled, child: child!);
-            },
+                builder: (context, tickerModeEnabled, child) {
+                  return TickerMode(enabled: tickerModeEnabled, child: child!);
+                },
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: ValueListenableBuilder<bool>(
+                  valueListenable: _tickerModeNotifier,
+                  child: Material(
+                    type: MaterialType.transparency,
+                    child: _buildChatHeader(mediaQuery.padding.top),
+                  ),
+                  builder: (context, tickerModeEnabled, child) {
+                    return TickerMode(
+                      enabled: tickerModeEnabled,
+                      child: child!,
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
         ),
         // 🛡️ THE ARMOR (OOM BLOCKER)
@@ -2177,21 +2198,6 @@ class _MainChatScreenState extends State<MainChatScreen>
             );
           },
         ),
-        Positioned(
-          top: 0,
-          left: 0,
-          right: 0,
-          child: ValueListenableBuilder<bool>(
-            valueListenable: _tickerModeNotifier,
-            child: Material(
-              type: MaterialType.transparency,
-              child: _buildChatHeader(mediaQuery.padding.top),
-            ),
-            builder: (context, tickerModeEnabled, child) {
-              return TickerMode(enabled: tickerModeEnabled, child: child!);
-            },
-          ),
-        ),
       ],
     );
   }
@@ -2206,6 +2212,7 @@ class _ChatMessageViewport extends StatelessWidget {
   final ValueListenable<_VaultContinuationState> vaultStateListenable;
   final ValueListenable<bool> firstTokenWaitListenable;
   final Color accentColor;
+  final double snackBarBottomMargin;
 
   const _ChatMessageViewport({
     required this.messagesListenable,
@@ -2214,6 +2221,7 @@ class _ChatMessageViewport extends StatelessWidget {
     required this.vaultStateListenable,
     required this.firstTokenWaitListenable,
     required this.accentColor,
+    required this.snackBarBottomMargin,
   });
 
   @override
@@ -2251,6 +2259,7 @@ class _ChatMessageViewport extends StatelessWidget {
                         key: ObjectKey(msg),
                         message: msg,
                         userBubbleColor: userBubbleColor,
+                        snackBarBottomMargin: snackBarBottomMargin,
                       );
                     },
                   ),

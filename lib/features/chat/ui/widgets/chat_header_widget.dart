@@ -224,7 +224,7 @@ class ChatHeaderWidget extends StatelessWidget {
                           ),
                           SizedBox(width: 12),
                           Text(
-                            'Exit Aitana',
+                            'Exit',
                             style: TextStyle(
                               color: Colors.white,
                               fontFamily: 'Outfit',

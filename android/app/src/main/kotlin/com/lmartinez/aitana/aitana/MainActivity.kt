@@ -88,6 +88,7 @@ import android.animation.ValueAnimator
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
 import android.provider.Settings
 import android.provider.ContactsContract
 import android.view.GestureDetector
@@ -176,7 +177,7 @@ class MainActivity : FlutterFragmentActivity() {
     // Floating overlay
     private var overlayView: View? = null
     private var previewView: PreviewView? = null
-    // Breathing halo animator — cancelled and nulled in hideCameraOverlay()
+    // Recording status pulse animator - cancelled and nulled in hideCameraOverlay()
     private var haloAnimator: ValueAnimator? = null
 
     // DEVICE_EVENTS stream sink — emits real hardware start/stop confirmations to Dart
@@ -1779,18 +1780,17 @@ class MainActivity : FlutterFragmentActivity() {
 
     /**
      * Creates and attaches the draggable [PreviewView] overlay — wrapped in a
-     * "Safety Halo" [FrameLayout] — to the system [WindowManager].
+     * premium recording frame [FrameLayout] — to the system [WindowManager].
      *
-     * ## Safety Halo
-     * A [GradientDrawable] border (Neon Purple → Deep Indigo, 8dp thick) is
-     * applied as the [FrameLayout] background. A [ValueAnimator] pulses the
-     * border alpha in an infinite reverse loop to create a breathing effect
-     * that is visible even in bright ambient environments (e.g., driving).
+     * ## Premium Frame
+     * A layered CyberBlue frame is applied as the [FrameLayout] background.
+     * The [ValueAnimator] pulses only a small recording status dot so the
+     * live PreviewView texture remains visually untouched.
      *
      * ## Double-Tap to Stop
      * A [GestureDetector] is layered over the touch pipeline. On double-tap:
-     *  1. The breathing animator is cancelled.
-     *  2. The border instantly turns solid red as visual confirmation.
+     *  1. The status pulse animator is cancelled.
+     *  2. The frame/status indicator instantly turn red as visual confirmation.
      *  3. The container animates to 80% scale over 200 ms.
      *  4. [recording?.stop()] is called — the existing [VideoRecordEvent.Finalize]
      *     callback handles file save and window teardown automatically.
@@ -1819,58 +1819,101 @@ class MainActivity : FlutterFragmentActivity() {
         // inside the Activity's GL context. This is the only mode that renders above
         // the Keyguard because SurfaceView (used by COMPATIBLE) is composited by
         // SurfaceFlinger in a Z-layer behind the secure Keyguard window.
+        val cyberBlue = Color.parseColor("#00ADB5")
+        val recordingRed = Color.parseColor("#FF3358")
+        val frameInset = dpToPx(8)
+
         val pv = PreviewView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             ).also { lp ->
-                // 8dp inset so the halo border is visible all around the preview
-                val inset = dpToPx(8)
-                lp.setMargins(inset, inset, inset, inset)
+                // Inset keeps the premium frame separate from the live texture.
+                lp.setMargins(frameInset, frameInset, frameInset, frameInset)
             }
             implementationMode = PreviewView.ImplementationMode.PERFORMANCE
+            setBackgroundColor(Color.BLACK)
         }
         previewView = pv
 
-        // ── 2. Safety Halo border (GradientDrawable, Neon Purple → Deep Indigo) ────
-        val haloBorder = GradientDrawable().apply {
-            shape             = GradientDrawable.RECTANGLE
-            gradientType      = GradientDrawable.LINEAR_GRADIENT
-            orientation       = GradientDrawable.Orientation.TL_BR
-            colors            = intArrayOf(
-                Color.parseColor("#A020F0"),  // Neon Purple
-                Color.parseColor("#4B0082")   // Deep Indigo
-            )
-            cornerRadius      = dpToPx(12).toFloat()
-            // Stroke-only approach: fill is transparent, stroke carries the colour.
-            // A stroke width of 8dp is clearly visible without obscuring the preview.
-            setStroke(dpToPx(8), Color.parseColor("#A020F0"))
+        // Premium frame: layered CyberBlue chrome with a constrained local glow.
+        val outerGlow = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(18).toFloat()
             setColor(Color.TRANSPARENT)
+            setStroke(dpToPx(2), Color.argb(96, 0x00, 0xAD, 0xB5))
+        }
+        val frameStroke = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            gradientType = GradientDrawable.LINEAR_GRADIENT
+            orientation = GradientDrawable.Orientation.TL_BR
+            colors = intArrayOf(
+                Color.argb(218, 0x05, 0x10, 0x16),
+                Color.argb(178, 0x0B, 0x22, 0x2A)
+            )
+            cornerRadius = dpToPx(15).toFloat()
+            setStroke(dpToPx(1), cyberBlue)
+        }
+        val haloBorder = LayerDrawable(arrayOf(outerGlow, frameStroke)).apply {
+            val chromeInset = dpToPx(2)
+            setLayerInset(1, chromeInset, chromeInset, chromeInset, chromeInset)
         }
 
-        // ── 3. FrameLayout container (halo + PreviewView) ─────────────────────────
+        val statusGlowDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(Color.argb(72, 0xFF, 0x33, 0x58))
+            setStroke(dpToPx(1), Color.argb(140, 0xFF, 0x33, 0x58))
+        }
+        val statusDotDrawable = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(recordingRed)
+            setStroke(dpToPx(1), Color.argb(230, 0xFF, 0xC1, 0xCC))
+        }
+        val statusGlowView = View(this).apply {
+            background = statusGlowDrawable
+            alpha = 0.85f
+            layoutParams = FrameLayout.LayoutParams(
+                dpToPx(16),
+                dpToPx(16),
+                Gravity.CENTER
+            )
+        }
+        val statusDotView = View(this).apply {
+            background = statusDotDrawable
+            elevation = dpToPx(3).toFloat()
+            layoutParams = FrameLayout.LayoutParams(
+                dpToPx(8),
+                dpToPx(8),
+                Gravity.CENTER
+            )
+        }
+        val statusIndicator = FrameLayout(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                dpToPx(22),
+                dpToPx(22),
+                Gravity.TOP or Gravity.END
+            ).also { lp ->
+                lp.setMargins(0, dpToPx(9), dpToPx(9), 0)
+            }
+            addView(statusGlowView)
+            addView(statusDotView)
+        }
+
+        // ── 3. FrameLayout container (frame + PreviewView + status) ───────────────
         val container = FrameLayout(this).apply {
             background = haloBorder
+            clipToPadding = false
             addView(pv)
+            addView(statusIndicator)
         }
 
-        // ── 4. Breathing ValueAnimator (alpha 255 → 100 → 255, infinite) ──────────
-        //
-        // We animate the STROKE alpha via a custom property rather than view alpha
-        // so that the PreviewView inside is never dimmed — only the border breathes.
-        haloAnimator = ValueAnimator.ofInt(255, 100).apply {
-            duration       = 1200L          // ms for one half-cycle (in or out)
+        // Pulse only the small status glow so the PreviewView texture stays untouched.
+        haloAnimator = ValueAnimator.ofFloat(0.55f, 1.0f).apply {
+            duration       = 1400L          // ms for one half-cycle (in or out)
             repeatCount    = ValueAnimator.INFINITE
             repeatMode     = ValueAnimator.REVERSE
             addUpdateListener { animator ->
-                val alpha  = animator.animatedValue as Int
-                val color  = Color.argb(
-                    alpha,
-                    0xA0,   // R component of #A020F0
-                    0x20,   // G
-                    0xF0    // B
-                )
-                haloBorder.setStroke(dpToPx(8), color)
+                statusGlowView.alpha = animator.animatedValue as Float
             }
             start()
         }
@@ -1878,7 +1921,7 @@ class MainActivity : FlutterFragmentActivity() {
         // ── 5. WindowManager LayoutParams (full overlay, Keyguard bypass) ─────────
         //
         // The outer size includes the 8dp margins on both sides, so the actual window
-        // is 240 + 16 dp wide and 180 + 16 dp tall to accommodate the visible halo.
+        // is 240 + 16 dp wide and 180 + 16 dp tall to accommodate the visible frame.
         val overlayW = dpToPx(256)  // 240 (preview) + 8 (left) + 8 (right)
         val overlayH = dpToPx(196)  // 180 (preview) + 8 (top)  + 8 (bottom)
         val params = WindowManager.LayoutParams(
@@ -1910,8 +1953,11 @@ class MainActivity : FlutterFragmentActivity() {
                     haloAnimator?.cancel()
                     haloAnimator = null
 
-                    // b) Flash the border red as visual confirmation
-                    haloBorder.setStroke(dpToPx(8), Color.RED)
+                    // b) Flash the frame/status red as visual confirmation
+                    frameStroke.setStroke(dpToPx(1), Color.RED)
+                    statusGlowDrawable.setColor(Color.argb(82, 0xFF, 0x4D, 0x4D))
+                    statusDotDrawable.setColor(Color.RED)
+                    statusGlowView.alpha = 1.0f
 
                     // c) Animate the container to 80% scale over 200 ms
                     container.animate()
@@ -1975,12 +2021,12 @@ class MainActivity : FlutterFragmentActivity() {
 
         wm.addView(container, params)
         overlayView = container
-        Log.i("CameraX", "Safety Halo overlay shown (double-tap to stop).")
+        Log.i("CameraX", "Premium camera overlay shown (double-tap to stop).")
     }
 
     /**
-     * Removes the floating Safety Halo overlay from [WindowManager].
-     * Also cancels the breathing [haloAnimator] to prevent resource leaks on any
+     * Removes the floating premium camera overlay from [WindowManager].
+     * Also cancels the status pulse [haloAnimator] to prevent resource leaks on any
      * teardown path (normal stop, double-tap, or [onDestroy]).
      * Safe to call when no overlay is present — silently no-ops.
      */

@@ -37,6 +37,7 @@ Aitana is an advanced, privacy-first AI assistant built with Flutter and powered
 - `lib/features/settings/`: Core persona management and application-wide configuration services.
 - `lib/features/vault/`: Multimodal storage layer, HNSW vector search implementation, and image analysis models.
 - `lib/core/theme/`: Shared styling, including the `SystemLockOverlay` ("Armor").
+- `lib/core/ui/`: Centralized UI utility components, including `AppSnackBars` — a unified snackbar factory providing consistent success, warning, and error feedback across all screens.
 - `lib/core/constants/`: Centralized native communication channels and shared identifiers.
 - `android/app/src/main/kotlin/...`: Native Android implementation for LiteRT tools, GeofenceBroadcastReceiver, and MethodChannel bridges.
 

@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/vault/models/personal_vault_image.dart';
 import 'package:aitana/features/vault/services/batch_ingestion_manager.dart';
@@ -619,12 +620,7 @@ class _VaultManagerScreenState extends State<VaultManagerScreen> {
       await ObjectBoxService.instance.deleteVaultItem(image.id);
 
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Item deleted from the vault."),
-          backgroundColor: Colors.green,
-        ),
-      );
+      AppSnackBars.showSuccess(context, "Item deleted from the vault.");
     }
   }
 }

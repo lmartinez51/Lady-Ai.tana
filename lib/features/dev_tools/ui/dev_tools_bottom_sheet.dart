@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 import 'package:aitana/core/services/foreground_service_handler.dart';
 import 'package:aitana/features/geofencing/ui/widgets/dev_geofence_modal.dart';
 import 'package:aitana/core/database/objectbox_service.dart';
@@ -257,11 +258,9 @@ class _DevToolsBottomSheetState extends State<DevToolsBottomSheet> {
                 Navigator.of(dialogContext).pop(); // Close dialog
                 Navigator.of(context).pop(); // Close bottom sheet
                 await action();
-                rootMessenger.showSnackBar(
-                  const SnackBar(
-                    content: Text('Operation Complete. Target Purged.'),
-                    backgroundColor: Colors.green,
-                  ),
+                AppSnackBars.showSuccessFromMessenger(
+                  rootMessenger,
+                  'Operation Complete. Target Purged.',
                 );
               },
             ),

@@ -6,6 +6,7 @@ import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/rag/models/legal_document_record.dart';
 import 'package:aitana/features/rag/services/streaming_document_chunker.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 
 class LegalLibraryScreen extends StatefulWidget {
   const LegalLibraryScreen({super.key});
@@ -30,10 +31,9 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
 
         if (ObjectBoxService.instance.isDocumentExists(fileName)) {
           if (!mounted) return;
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Document "$fileName" is already in the library.'),
-            ),
+          AppSnackBars.showWarning(
+            context,
+            'Document "$fileName" is already in the library.',
           );
           return;
         }
@@ -115,19 +115,14 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
         );
 
         if (!mounted) return;
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'Ingested ${chunks.length} chunks from $fileName [${categoryEnum.displayName}]',
-            ),
-          ),
+        AppSnackBars.showSuccess(
+          context,
+          'Ingested ${chunks.length} chunks from $fileName [${categoryEnum.displayName}]',
         );
       }
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Error processing PDF: $e')));
+      AppSnackBars.showError(context, 'Error processing PDF: $e');
     } finally {
       if (mounted) {
         setState(() {
@@ -447,10 +442,9 @@ class _LegalLibraryScreenState extends State<LegalLibraryScreen> {
                             ObjectBoxService.instance.deleteLegalDocument(
                               doc.id,
                             );
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Document deleted.'),
-                              ),
+                            AppSnackBars.showSuccess(
+                              context,
+                              'Document deleted.',
                             );
                           },
                         ),

@@ -3,6 +3,7 @@ import 'package:aitana/core/database/objectbox_service.dart';
 import 'package:aitana/features/settings/models/persona_record.dart';
 import 'package:aitana/features/chat/services/llm/local_llm_service.dart';
 import 'package:aitana/core/theme/app_colors.dart';
+import 'package:aitana/core/ui/app_snackbars.dart';
 
 class PersonaVaultScreen extends StatefulWidget {
   const PersonaVaultScreen({super.key});
@@ -41,11 +42,9 @@ class _PersonaVaultScreenState extends State<PersonaVaultScreen> {
     _loadPersonas();
 
     if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('${persona.name} set as active persona.'),
-          backgroundColor: Colors.green,
-        ),
+      AppSnackBars.showSuccess(
+        context,
+        '${persona.name} set as active persona.',
       );
     }
   }
